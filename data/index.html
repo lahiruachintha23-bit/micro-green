@@ -7,18 +7,18 @@
     <title>Microgreen Tray Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
     <style>
-        :root{
+        :root {
             --bg-start: #041f16;
             --bg-end: #072b20;
-            --card-bg: rgba(7,56,46,0.95);
-            --card-border: rgba(255,255,255,0.03);
+            --card-bg: rgba(7, 56, 46, 0.95);
+            --card-border: rgba(255, 255, 255, 0.03);
             --text-main: #c8f7e6;
             --text-muted: #8fb7a6;
             --accent: #00e08a;
             --accent-2: #00cf7a;
             --danger: #ff6b6b;
-            --glass: rgba(255,255,255,0.03);
-            --shadow: 0 10px 30px rgba(0,0,0,0.6);
+            --glass: rgba(255, 255, 255, 0.03);
+            --shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
         }
 
         * {
@@ -67,7 +67,7 @@
 
         .card:hover {
             transform: translateY(-6px);
-            box-shadow: 0 18px 40px rgba(0,0,0,0.7);
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.7);
         }
 
         .stat-label {
@@ -99,13 +99,28 @@
             margin-top: 10px;
             background: var(--glass);
             color: var(--text-main);
-            border: 1px solid rgba(255,255,255,0.02);
+            border: 1px solid rgba(255, 255, 255, 0.02);
         }
 
-        .stage-germination { background: rgba(0,192,120,0.12); color: var(--accent); }
-        .stage-growth { background: rgba(0,160,200,0.08); color: #8be4ff; }
-        .stage-harvest { background: rgba(160,120,255,0.06); color: #d2b8ff; }
-        .stage-unknown { background: rgba(255,255,255,0.02); color: var(--text-muted); }
+        .stage-germination {
+            background: rgba(0, 192, 120, 0.12);
+            color: var(--accent);
+        }
+
+        .stage-growth {
+            background: rgba(0, 160, 200, 0.08);
+            color: #8be4ff;
+        }
+
+        .stage-harvest {
+            background: rgba(160, 120, 255, 0.06);
+            color: #d2b8ff;
+        }
+
+        .stage-unknown {
+            background: rgba(255, 255, 255, 0.02);
+            color: var(--text-muted);
+        }
 
         .controls {
             display: grid;
@@ -124,43 +139,113 @@
             font-size: 0.9em;
         }
 
-        .btn-primary { background: linear-gradient(180deg,var(--accent),var(--accent-2)); color: #002612; }
-        .btn-primary:hover { filter: brightness(0.95); }
+        .btn-primary {
+            background: linear-gradient(180deg, var(--accent), var(--accent-2));
+            color: #002612;
+        }
 
-        .btn-danger { background: var(--danger); color: white; }
-        .btn-danger:hover { filter: brightness(0.95); }
+        .btn-primary:hover {
+            filter: brightness(0.95);
+        }
 
-        .btn-success { background: rgba(85,239,196,0.12); color: var(--accent); border: 1px solid rgba(0,224,138,0.12); }
-        .btn-success:hover { transform: translateY(-2px); }
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
 
-        .btn-default { background: rgba(255,255,255,0.03); color: var(--text-main); border: 1px solid rgba(255,255,255,0.02); }
-        .btn-default:hover { transform: translateY(-2px); }
+        .btn-danger:hover {
+            filter: brightness(0.95);
+        }
 
-        .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+        .btn-success {
+            background: rgba(85, 239, 196, 0.12);
+            color: var(--accent);
+            border: 1px solid rgba(0, 224, 138, 0.12);
+        }
+
+        .btn-success:hover {
+            transform: translateY(-2px);
+        }
+
+        .btn-default {
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-main);
+            border: 1px solid rgba(255, 255, 255, 0.02);
+        }
+
+        .btn-default:hover {
+            transform: translateY(-2px);
+        }
+
+        .btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
 
         .chart-container {
             position: relative;
             height: 300px;
-            background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(0,0,0,0.05));
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.01), rgba(0, 0, 0, 0.05));
             border-radius: 12px;
             padding: 18px;
             box-shadow: var(--shadow);
             margin-bottom: 30px;
         }
 
-        .mode-toggle { display: flex; gap: 10px; margin-bottom: 15px; background: rgba(255,255,255,0.02); border-radius: 8px; padding: 6px; }
+        .mode-toggle {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 8px;
+            padding: 6px;
+        }
 
-        .mode-btn { flex: 1; padding: 8px; border: none; background: transparent; cursor: pointer; font-weight: 700; border-radius: 6px; transition: all 0.18s; color: var(--text-main); }
+        .mode-btn {
+            flex: 1;
+            padding: 8px;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            font-weight: 700;
+            border-radius: 6px;
+            transition: all 0.18s;
+            color: var(--text-main);
+        }
 
-        .mode-btn.active { background: rgba(255,255,255,0.02); box-shadow: 0 2px 8px rgba(0,0,0,0.6); }
+        .mode-btn.active {
+            background: rgba(255, 255, 255, 0.02);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+        }
 
-        .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-top: 15px; }
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
 
-        .status-item { background: transparent; padding: 12px; border-radius: 8px; text-align: center; border: 1px solid rgba(255,255,255,0.02); }
+        .status-item {
+            background: transparent;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.02);
+        }
 
-        .status-item label { display: block; font-size: 0.85em; color: var(--text-muted); margin-bottom: 5px; }
+        .status-item label {
+            display: block;
+            font-size: 0.85em;
+            color: var(--text-muted);
+            margin-bottom: 5px;
+        }
 
-        .status-item span { display: block; font-size: 1.3em; font-weight: 800; color: var(--text-main); }
+        .status-item span {
+            display: block;
+            font-size: 1.3em;
+            font-weight: 800;
+            color: var(--text-main);
+        }
     </style>
 </head>
 
