@@ -887,10 +887,13 @@ void handleStatus()
 
   String fanModeLabel = getFanModeLabel();
   String misterModeLabel = getMisterModeLabel();
+  bool wifiConnected = WiFi.status() == WL_CONNECTED;
+  String wifiMode = (WiFi.getMode() == WIFI_AP) ? "AP" : (WiFi.getMode() == WIFI_STA) ? "STA"
+                                                                                      : "OFF";
 
-  char buffer[1024];
+  char buffer[1400];
   snprintf(buffer, sizeof(buffer),
-           "{\"distance\":%ld,\"growthStage\":\"%s\",\"soilValue\":%d,\"flowValue\":%s,\"pumpMode\":\"%s\",\"pumpState\":\"%s\",\"motorStatus\":\"%s\",\"temperature\":%s,\"humidity\":%s,\"floatSwitch\":%s,\"fansActive\":%s,\"fanMode\":\"%s\",\"misterActive\":%s,\"misterMode\":\"%s\",\"daysSinceGermination\":%lu}",
+           "{\"distance\":%ld,\"growthStage\":\"%s\",\"soilValue\":%d,\"flowValue\":%s,\"pumpMode\":\"%s\",\"pumpState\":\"%s\",\"motorStatus\":\"%s\",\"temperature\":%s,\"humidity\":%s,\"floatSwitch\":%s,\"fansActive\":%s,\"fanMode\":\"%s\",\"misterActive\":%s,\"misterMode\":\"%s\",\"daysSinceGermination\":%lu,\"wifiConnected\":%s,\"wifiMode\":\"%s\",\"deviceIp\":\"%s\",\"connectionStatus\":\"%s\"}",
            currentHeight,
            growthStage.c_str(),
            analogRead(SOIL_PIN),
@@ -905,9 +908,29 @@ void handleStatus()
            fanModeLabel.c_str(),
            misterSprayInProgress ? "true" : "false",
            misterModeLabel.c_str(),
-           daysSinceGerm);
+           daysSinceGerm,
+           wifiConnected ? "true" : "false",
+           wifiMode.c_str(),
+           WiFi.localIP().toString().c_str(),
+           wifiConnected ? "online" : "offline");
 
   server.send(200, "application/json", buffer);
+}
+
+void handleHealth()
+{
+  bool wifiConnected = WiFi.status() == WL_CONNECTED;
+  String wifiMode = (WiFi.getMode() == WIFI_AP) ? "AP" : (WiFi.getMode() == WIFI_STA) ? "STA"
+                                                                                      : "OFF";
+
+  String response = "{\"status\":\"" + String(wifiConnected ? "online" : "offline") +
+                    "\",\"wifiConnected\":" + String(wifiConnected ? "true" : "false") +
+                    ",\"wifiMode\":\"" + wifiMode +
+                    "\",\"ip\":\"" + WiFi.localIP().toString() +
+                    "\",\"apIp\":\"" + WiFi.softAPIP().toString() +
+                    "\",\"uptimeMs\":" + String(millis()) + "}";
+
+  server.send(200, "application/json", response);
 }
 
 void handleControl()
@@ -1222,6 +1245,7 @@ void setup()
   // Register web server routes (so server handlers are available in STA or AP)
   server.on("/", handleRoot);
   server.on("/status", handleStatus);
+  server.on("/health", handleHealth);
   server.on("/control", handleControl);
   server.on("/motor", handleMotorControl);
   server.on("/fan", handleFanControl);

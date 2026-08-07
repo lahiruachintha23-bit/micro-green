@@ -1,43 +1,55 @@
-const https = require('https');
+const { Client } = require('pg');
 
-function requestJson(url, method, body) {
-    return new Promise((resolve, reject) => {
-        const parsed = new URL(url);
-        const payload = body ? JSON.stringify(body) : null;
+const TABLES = new Set(['sensor_readings', 'water_events', 'commands']);
 
-        const options = {
-            hostname: parsed.hostname,
-            port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
-            path: parsed.pathname + parsed.search,
-            method,
-            headers: {
-                'Content-Type': 'application/json',
-                'apikey': process.env.SUPABASE_ANON_KEY || '',
-                'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY || ''}`,
-            },
-        };
+function normalizeKey(key) {
+    if (key === 'recordedAt') {
+        return 'recorded_at';
+    }
+    if (key === 'eventType') {
+        return 'event_type';
+    }
+    return key;
+}
 
-        if (payload) {
-            options.headers['Content-Length'] = Buffer.byteLength(payload);
+function getDatabaseConnectionString() {
+    return process.env.NETLIFY_DATABASE_URL || process.env.DATABASE_URL || process.env.POSTGRES_URL;
+}
+
+async function insertRecord(table, record) {
+    const connectionString = getDatabaseConnectionString();
+    if (!connectionString) {
+        throw new Error('Missing Netlify database connection string. Add NETLIFY_DATABASE_URL or DATABASE_URL to your environment.');
+    }
+
+    const client = new Client({
+        connectionString,
+        ssl: connectionString.includes('sslmode=require') || connectionString.includes('render.com') ? { rejectUnauthorized: false } : undefined,
+    });
+
+    await client.connect();
+
+    try {
+        const normalizedRecord = {};
+        for (const [key, value] of Object.entries(record || {})) {
+            normalizedRecord[normalizeKey(key)] = value;
         }
 
-        const client = parsed.protocol === 'https:' ? require('https') : require('http');
-        const req = client.request(options, (res) => {
-            let raw = '';
-            res.on('data', (chunk) => { raw += chunk; });
-            res.on('end', () => {
-                try {
-                    resolve({ status: res.statusCode, body: raw ? JSON.parse(raw) : {} });
-                } catch (error) {
-                    resolve({ status: res.statusCode, body: raw });
-                }
-            });
-        });
+        const columns = Object.keys(normalizedRecord);
+        if (!columns.length) {
+            throw new Error('Record is empty');
+        }
 
-        req.on('error', reject);
-        if (payload) req.write(payload);
-        req.end();
-    });
+        const placeholders = columns.map((_, index) => `$${index + 1}`).join(', ');
+        const columnList = columns.map((column) => `"${column}"`).join(', ');
+        const values = columns.map((column) => normalizedRecord[column]);
+
+        const query = `INSERT INTO "${table}" (${columnList}) VALUES (${placeholders}) RETURNING *;`;
+        const result = await client.query(query, values);
+        return result.rows[0];
+    } finally {
+        await client.end();
+    }
 }
 
 exports.handler = async (event) => {
@@ -52,47 +64,46 @@ exports.handler = async (event) => {
         return { statusCode: 200, headers, body: '' };
     }
 
-    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+    if (event.httpMethod !== 'POST') {
         return {
-            statusCode: 500,
+            statusCode: 405,
             headers,
-            body: JSON.stringify({ ok: false, error: 'Missing SUPABASE_URL or SUPABASE_ANON_KEY' }),
+            body: JSON.stringify({ ok: false, error: 'Method not allowed' }),
         };
     }
 
-    if (event.httpMethod === 'POST') {
-        try {
-            const payload = event.body ? JSON.parse(event.body) : {};
-            const { table, record } = payload;
+    try {
+        const payload = event.body ? JSON.parse(event.body) : {};
+        const { table, record } = payload;
 
-            if (!table || !record) {
-                return {
-                    statusCode: 400,
-                    headers,
-                    body: JSON.stringify({ ok: false, error: 'table and record are required' }),
-                };
-            }
-
-            const url = `${process.env.SUPABASE_URL}/rest/v1/${table}`;
-            const response = await requestJson(url, 'POST', [record]);
-
+        if (!table || !record) {
             return {
-                statusCode: response.status >= 200 && response.status < 300 ? 200 : response.status,
+                statusCode: 400,
                 headers,
-                body: JSON.stringify({ ok: response.status >= 200 && response.status < 300, response: response.body }),
-            };
-        } catch (error) {
-            return {
-                statusCode: 500,
-                headers,
-                body: JSON.stringify({ ok: false, error: error.message }),
+                body: JSON.stringify({ ok: false, error: 'table and record are required' }),
             };
         }
-    }
 
-    return {
-        statusCode: 405,
-        headers,
-        body: JSON.stringify({ ok: false, error: 'Method not allowed' }),
-    };
+        if (!TABLES.has(table)) {
+            return {
+                statusCode: 400,
+                headers,
+                body: JSON.stringify({ ok: false, error: 'Unsupported table. Use sensor_readings, water_events, or commands.' }),
+            };
+        }
+
+        const insertedRow = await insertRecord(table, record);
+
+        return {
+            statusCode: 200,
+            headers,
+            body: JSON.stringify({ ok: true, table, row: insertedRow }),
+        };
+    } catch (error) {
+        return {
+            statusCode: 500,
+            headers,
+            body: JSON.stringify({ ok: false, error: error.message }),
+        };
+    }
 };

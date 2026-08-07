@@ -74,6 +74,56 @@ function forwardToDevice(action) {
     });
 }
 
+async function checkDeviceHealth() {
+    const targetUrl = process.env.ESP32_CONTROL_URL;
+    if (!targetUrl) {
+        return { connected: false, reason: 'No ESP32_CONTROL_URL configured' };
+    }
+
+    try {
+        const url = new URL(targetUrl);
+        const client = url.protocol === 'https:' ? https : http;
+
+        const response = await new Promise((resolve, reject) => {
+            const request = client.request(
+                {
+                    hostname: url.hostname,
+                    port: url.port || (url.protocol === 'https:' ? 443 : 80),
+                    path: `${url.pathname.replace(/\/$/, '')}/health`,
+                    method: 'GET',
+                    timeout: 5000,
+                },
+                (res) => {
+                    let body = '';
+                    res.on('data', (chunk) => { body += chunk; });
+                    res.on('end', () => {
+                        try {
+                            resolve({ statusCode: res.statusCode, body: body ? JSON.parse(body) : {} });
+                        } catch (error) {
+                            resolve({ statusCode: res.statusCode, body });
+                        }
+                    });
+                }
+            );
+
+            request.on('timeout', () => {
+                request.destroy(new Error('ESP32 health check timed out'));
+            });
+            request.on('error', reject);
+            request.end();
+        });
+
+        const connected = response.statusCode >= 200 && response.statusCode < 300;
+        return {
+            connected,
+            statusCode: response.statusCode,
+            details: response.body,
+        };
+    } catch (error) {
+        return { connected: false, reason: error.message };
+    }
+}
+
 exports.handler = async (event) => {
     const headers = {
         'Access-Control-Allow-Origin': '*',
@@ -87,10 +137,12 @@ exports.handler = async (event) => {
     }
 
     if (event.httpMethod === 'GET') {
+        const state = readState();
+        const health = await checkDeviceHealth();
         return {
             statusCode: 200,
             headers,
-            body: JSON.stringify(readState()),
+            body: JSON.stringify({ ...state, deviceReachable: health.connected, connectionStatus: health.connected ? 'online' : 'offline', health }),
         };
     }
 
