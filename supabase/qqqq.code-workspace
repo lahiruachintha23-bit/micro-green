@@ -1,0 +1,18 @@
+{
+	"folders": [
+		{
+			"path": "../../../../qqqq"
+		},
+		{
+			"name": "microgreen_tray",
+			"path": "../../../../qqqq/microgreen_tray"
+		},
+		{
+			"name": "microgreen_tray",
+			"path": ".."
+		}
+	],
+	"settings": {
+		"editor.acceptSuggestionOnEnter": "off"
+	}
+}

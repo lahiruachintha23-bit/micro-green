@@ -53,8 +53,8 @@
 #define GERMINATION_PERIOD_DAYS 3 // days after first motor trigger
 
 // WiFi AP configuration
-const char *WIFI_SSID = "Anjana";
-const char *WIFI_PASSWORD = "11111111";
+const char *WIFI_SSID = "HUAWEI Y9 Prime 2019";
+const char *WIFI_PASSWORD = "lasantha";
 
 WebServer server(80);
 
@@ -1106,6 +1106,44 @@ void handleNotFound()
   server.send(404, "text/plain", "Not found");
 }
 
+String wifiStatusToString(wl_status_t status)
+{
+  switch (status)
+  {
+  case WL_IDLE_STATUS:
+    return "WL_IDLE_STATUS";
+  case WL_NO_SSID_AVAIL:
+    return "WL_NO_SSID_AVAIL";
+  case WL_SCAN_COMPLETED:
+    return "WL_SCAN_COMPLETED";
+  case WL_CONNECTED:
+    return "WL_CONNECTED";
+  case WL_CONNECT_FAILED:
+    return "WL_CONNECT_FAILED";
+  case WL_CONNECTION_LOST:
+    return "WL_CONNECTION_LOST";
+  case WL_DISCONNECTED:
+    return "WL_DISCONNECTED";
+  default:
+    return "UNKNOWN";
+  }
+}
+
+void printWiFiState(const char *label)
+{
+  String localIp = WiFi.localIP().toString();
+  String apIp = WiFi.softAPIP().toString();
+  Serial.print(label);
+  Serial.print(" | mode=");
+  Serial.print(WiFi.getMode());
+  Serial.print(" | status=");
+  Serial.print(wifiStatusToString(WiFi.status()));
+  Serial.print(" | STA IP=");
+  Serial.print(localIp);
+  Serial.print(" | AP IP=");
+  Serial.println(apIp);
+}
+
 // ==================== Setup ====================
 void setup()
 {
@@ -1193,6 +1231,11 @@ void setup()
   server.onNotFound(handleNotFound);
 
   // Try connecting as WiFi station (STA) first, then fall back to AP mode
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  delay(100);
+  WiFi.setSleep(false);
+
   WiFi.mode(WIFI_STA);
   Serial.print("Attempting WiFi STA connect to: ");
   Serial.println(WIFI_SSID);
@@ -1203,6 +1246,10 @@ void setup()
   {
     delay(500);
     Serial.print('.');
+    if ((millis() - staStart) % 2000 < 500)
+    {
+      printWiFiState("STA connect");
+    }
   }
   if (WiFi.status() == WL_CONNECTED)
   {
@@ -1216,42 +1263,34 @@ void setup()
   {
     Serial.println();
     Serial.println("STA connect failed, starting AP fallback");
-#ifdef USE_STATIC_AP_IP
-    // Explicit static AP IP (kept only when USE_STATIC_AP_IP is defined)
+
     IPAddress apIP(192, 168, 4, 1);
     IPAddress gateway(192, 168, 4, 1);
     IPAddress subnet(255, 255, 255, 0);
-#endif
+
     WiFi.mode(WIFI_AP);
-#ifdef USE_STATIC_AP_IP
     if (!WiFi.softAPConfig(apIP, gateway, subnet))
     {
       Serial.println("Warning: softAPConfig failed");
     }
-#endif
+
     bool apStarted = WiFi.softAP(WIFI_SSID, WIFI_PASSWORD);
     if (!apStarted)
     {
       Serial.println("Error: WiFi.softAP failed to start");
     }
-    // wait briefly for interface to come up
+
     unsigned long apStart = millis();
     while ((WiFi.softAPIP() == IPAddress(0, 0, 0, 0)) && (millis() - apStart < 5000))
     {
       delay(100);
     }
+
     Serial.print("WiFi AP started: ");
     Serial.println(WIFI_SSID);
     Serial.print("AP IP address: ");
     Serial.println(WiFi.softAPIP());
-
-    if (String(WIFI_SSID) == "Anjana")
-    {
-      Serial.print("Hardcoded hotspot '");
-      Serial.print(WIFI_SSID);
-      Serial.print("' active. AP IP: ");
-      Serial.println(WiFi.softAPIP());
-    }
+    printWiFiState("AP fallback");
   }
 
   server.begin();
