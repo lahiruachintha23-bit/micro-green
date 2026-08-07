@@ -31,28 +31,59 @@ function writeState(action) {
     return state;
 }
 
-function forwardToDevice(action) {
+function getDeviceBaseUrl() {
+    return process.env.ESP32_CONTROL_URL;
+}
+
+function buildDeviceUrl(targetPath, query = {}) {
+    const baseUrl = getDeviceBaseUrl();
+    if (!baseUrl) {
+        return null;
+    }
+
+    const url = new URL(baseUrl);
+    url.pathname = `${url.pathname.replace(/\/$/, '')}${targetPath}`;
+
+    Object.entries(query).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+            url.searchParams.set(key, String(value));
+        }
+    });
+
+    return url;
+}
+
+function forwardToDevice(action, mode) {
     return new Promise((resolve) => {
-        const targetUrl = process.env.ESP32_CONTROL_URL;
+        const targetUrl = getDeviceBaseUrl();
         if (!targetUrl) {
             resolve({ ok: false, reason: 'No ESP32_CONTROL_URL configured' });
             return;
         }
 
         const url = new URL(targetUrl);
-        const payload = JSON.stringify({ action });
-        const client = url.protocol === 'https:' ? https : http;
+        let requestPath = url.pathname || '/';
+        let requestQuery = {};
 
+        if (mode) {
+            requestPath = `${requestPath.replace(/\/$/, '')}/control`;
+            requestQuery.mode = mode;
+        } else if (['on', 'off', 'reset'].includes(action)) {
+            requestPath = `${requestPath.replace(/\/$/, '')}/motor`;
+            requestQuery.action = action;
+        } else if (['Auto', 'ManualOn', 'ManualOff'].includes(action)) {
+            requestPath = `${requestPath.replace(/\/$/, '')}/control`;
+            requestQuery.mode = action;
+        }
+
+        const client = url.protocol === 'https:' ? https : http;
         const request = client.request(
             {
                 hostname: url.hostname,
                 port: url.port || (url.protocol === 'https:' ? 443 : 80),
-                path: url.pathname + (url.search || ''),
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Content-Length': Buffer.byteLength(payload),
-                },
+                path: `${requestPath}?${new URLSearchParams(requestQuery).toString()}`,
+                method: 'GET',
+                timeout: 6000,
             },
             (response) => {
                 let body = '';
@@ -65,17 +96,20 @@ function forwardToDevice(action) {
             }
         );
 
+        request.on('timeout', () => {
+            request.destroy(new Error('ESP32 command timed out'));
+        });
+
         request.on('error', () => {
             resolve({ ok: false, reason: 'ESP32 request failed' });
         });
 
-        request.write(payload);
         request.end();
     });
 }
 
 async function checkDeviceHealth() {
-    const targetUrl = process.env.ESP32_CONTROL_URL;
+    const targetUrl = getDeviceBaseUrl();
     if (!targetUrl) {
         return { connected: false, reason: 'No ESP32_CONTROL_URL configured' };
     }
@@ -124,6 +158,52 @@ async function checkDeviceHealth() {
     }
 }
 
+async function checkDeviceStatus() {
+    const targetUrl = getDeviceBaseUrl();
+    if (!targetUrl) {
+        return { connected: false, reason: 'No ESP32_CONTROL_URL configured' };
+    }
+
+    try {
+        const url = new URL(targetUrl);
+        const client = url.protocol === 'https:' ? https : http;
+
+        const response = await new Promise((resolve, reject) => {
+            const request = client.request(
+                {
+                    hostname: url.hostname,
+                    port: url.port || (url.protocol === 'https:' ? 443 : 80),
+                    path: `${url.pathname.replace(/\/$/, '')}/status`,
+                    method: 'GET',
+                    timeout: 5000,
+                },
+                (res) => {
+                    let body = '';
+                    res.on('data', (chunk) => { body += chunk; });
+                    res.on('end', () => {
+                        try {
+                            resolve({ statusCode: res.statusCode, body: body ? JSON.parse(body) : {} });
+                        } catch (error) {
+                            resolve({ statusCode: res.statusCode, body });
+                        }
+                    });
+                }
+            );
+
+            request.on('timeout', () => {
+                request.destroy(new Error('ESP32 status check timed out'));
+            });
+            request.on('error', reject);
+            request.end();
+        });
+
+        const connected = response.statusCode >= 200 && response.statusCode < 300;
+        return { connected, statusCode: response.statusCode, details: response.body };
+    } catch (error) {
+        return { connected: false, reason: error.message };
+    }
+}
+
 exports.handler = async (event) => {
     const headers = {
         'Access-Control-Allow-Origin': '*',
@@ -139,10 +219,19 @@ exports.handler = async (event) => {
     if (event.httpMethod === 'GET') {
         const state = readState();
         const health = await checkDeviceHealth();
+        const status = await checkDeviceStatus();
+        const details = status.connected && status.details ? status.details : {};
+
         return {
             statusCode: 200,
             headers,
-            body: JSON.stringify({ ...state, deviceReachable: health.connected, connectionStatus: health.connected ? 'online' : 'offline', health }),
+            body: JSON.stringify({
+                ...state,
+                ...details,
+                deviceReachable: health.connected,
+                connectionStatus: health.connected ? 'online' : 'offline',
+                health,
+            }),
         };
     }
 
@@ -155,9 +244,10 @@ exports.handler = async (event) => {
             payload = {};
         }
 
-        const action = payload.action || event.queryStringParameters?.action || 'status';
-        const state = writeState(action);
-        const forwarded = await forwardToDevice(action);
+        const action = payload.action || event.queryStringParameters?.action;
+        const mode = payload.mode || event.queryStringParameters?.mode;
+        const state = writeState(action || mode || 'status');
+        const forwarded = await forwardToDevice(action || mode, mode ? mode : undefined);
 
         return {
             statusCode: 200,

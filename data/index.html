@@ -318,32 +318,53 @@
     <script>
         let heightChart, waterChart;
 
-        function updateStatus() {
-            fetch('/status')
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('height').textContent = data.distance > 0 ? data.distance : '--';
-                    document.getElementById('soilValue').textContent = data.soilValue;
-                    document.getElementById('soilStatus').textContent = data.soilValue > 2000 ? 'Wet' : 'Dry';
-                    document.getElementById('flowValue').textContent = parseFloat(data.flowValue).toFixed(1);
-                    document.getElementById('flowStatus').textContent = data.flowValue > 900 ? '⚠️ High' : '✓ OK';
-                    document.getElementById('pumpMode').textContent = data.pumpMode;
-                    document.getElementById('pumpState').textContent = data.pumpState;
-                    document.getElementById('motorStatus').textContent = data.motorStatus || 'OFF';
+        async function updateStatus() {
+            try {
+                const response = await fetch('/.netlify/functions/motor-control');
+                if (!response.ok) {
+                    throw new Error('Netlify status fetch failed');
+                }
 
-                    const stageClasses = ['stage-germination', 'stage-growth', 'stage-harvest', 'stage-unknown'];
-                    const badge = document.getElementById('stageBadge');
-                    stageClasses.forEach(c => badge.classList.remove(c));
-                    badge.textContent = data.growthStage;
-                    badge.classList.add('stage-' + data.growthStage.toLowerCase());
+                const data = await response.json();
 
-                    updateModeButtons(data.pumpMode);
-                })
-                .catch(e => console.error(e));
+                document.getElementById('height').textContent = Number.isFinite(data.distance) && data.distance > 0 ? data.distance : '--';
+                document.getElementById('soilValue').textContent = data.soilValue ?? '--';
+                document.getElementById('soilStatus').textContent = (data.soilValue ?? 0) > 2000 ? 'Wet' : 'Dry';
+                document.getElementById('flowValue').textContent = Number.parseFloat(data.flowValue ?? 0).toFixed(1);
+                document.getElementById('flowStatus').textContent = (Number.parseFloat(data.flowValue ?? 0) > 900) ? '⚠️ High' : '✓ OK';
+                document.getElementById('pumpMode').textContent = data.pumpMode || 'Unknown';
+                document.getElementById('pumpState').textContent = data.pumpState || 'Unknown';
+                document.getElementById('motorStatus').textContent = data.motorStatus || 'OFF';
+
+                const stageName = (data.growthStage || 'unknown').toString();
+                const stageClasses = ['stage-germination', 'stage-growth', 'stage-harvest', 'stage-unknown'];
+                const badge = document.getElementById('stageBadge');
+                stageClasses.forEach(c => badge.classList.remove(c));
+                badge.textContent = stageName;
+                badge.classList.add('stage-' + stageName.toLowerCase());
+
+                updateModeButtons(data.pumpMode || 'Auto');
+            } catch (e) {
+                console.error('Status load error:', e);
+            }
         }
 
-        function setMode(mode) {
-            fetch('/control?mode=' + mode).then(updateStatus).catch(e => console.error(e));
+        async function setMode(mode) {
+            try {
+                const response = await fetch('/.netlify/functions/motor-control', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Netlify mode update failed');
+                }
+
+                await updateStatus();
+            } catch (e) {
+                console.error('Unable to update mode via Netlify function:', e);
+            }
         }
 
         async function motorAction(action) {
@@ -355,15 +376,14 @@
                 });
 
                 if (!response.ok) {
-                    throw new Error('Netlify function error');
+                    throw new Error('Netlify motor action failed');
                 }
 
                 const result = await response.json();
                 console.log('Motor command sent:', result);
-                updateStatus();
+                await updateStatus();
             } catch (e) {
-                console.warn('Falling back to local ESP32 motor endpoint:', e);
-                fetch('/motor?action=' + action).then(updateStatus).catch(err => console.error(err));
+                console.error('Motor action failed via Netlify function:', e);
             }
         }
 
