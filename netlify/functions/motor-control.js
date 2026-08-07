@@ -53,7 +53,7 @@ function buildDeviceUrl(targetPath, query = {}) {
     return url;
 }
 
-function forwardToDevice(action, mode) {
+function forwardToDevice(action, mode, target) {
     return new Promise((resolve) => {
         const targetUrl = getDeviceBaseUrl();
         if (!targetUrl) {
@@ -65,7 +65,14 @@ function forwardToDevice(action, mode) {
         let requestPath = url.pathname || '/';
         let requestQuery = {};
 
-        if (mode) {
+        if (target === 'fan' || action === 'fan') {
+            requestPath = `${requestPath.replace(/\/$/, '')}/fan`;
+            if (mode) requestQuery.mode = mode;
+        } else if (target === 'mister' || action === 'mister') {
+            requestPath = `${requestPath.replace(/\/$/, '')}/mister`;
+            if (action && action !== 'mister') requestQuery.action = action;
+            if (mode) requestQuery.mode = mode;
+        } else if (mode) {
             requestPath = `${requestPath.replace(/\/$/, '')}/control`;
             requestQuery.mode = mode;
         } else if (['on', 'off', 'reset'].includes(action)) {
@@ -77,6 +84,7 @@ function forwardToDevice(action, mode) {
         }
 
         const client = url.protocol === 'https:' ? https : http;
+        const startTime = Date.now();
         const request = client.request(
             {
                 hostname: url.hostname,
@@ -91,7 +99,8 @@ function forwardToDevice(action, mode) {
                     body += chunk;
                 });
                 response.on('end', () => {
-                    resolve({ ok: response.statusCode >= 200 && response.statusCode < 300, statusCode: response.statusCode, body });
+                    const latencyMs = Date.now() - startTime;
+                    resolve({ ok: response.statusCode >= 200 && response.statusCode < 300, statusCode: response.statusCode, latencyMs, body });
                 });
             }
         );
@@ -117,6 +126,7 @@ async function checkDeviceHealth() {
     try {
         const url = new URL(targetUrl);
         const client = url.protocol === 'https:' ? https : http;
+        const startTime = Date.now();
 
         const response = await new Promise((resolve, reject) => {
             const request = client.request(
@@ -131,10 +141,11 @@ async function checkDeviceHealth() {
                     let body = '';
                     res.on('data', (chunk) => { body += chunk; });
                     res.on('end', () => {
+                        const latencyMs = Date.now() - startTime;
                         try {
-                            resolve({ statusCode: res.statusCode, body: body ? JSON.parse(body) : {} });
+                            resolve({ statusCode: res.statusCode, latencyMs, body: body ? JSON.parse(body) : {} });
                         } catch (error) {
-                            resolve({ statusCode: res.statusCode, body });
+                            resolve({ statusCode: res.statusCode, latencyMs, body });
                         }
                     });
                 }
@@ -151,6 +162,7 @@ async function checkDeviceHealth() {
         return {
             connected,
             statusCode: response.statusCode,
+            latencyMs: response.latencyMs,
             details: response.body,
         };
     } catch (error) {
@@ -167,6 +179,7 @@ async function checkDeviceStatus() {
     try {
         const url = new URL(targetUrl);
         const client = url.protocol === 'https:' ? https : http;
+        const startTime = Date.now();
 
         const response = await new Promise((resolve, reject) => {
             const request = client.request(
@@ -181,10 +194,11 @@ async function checkDeviceStatus() {
                     let body = '';
                     res.on('data', (chunk) => { body += chunk; });
                     res.on('end', () => {
+                        const latencyMs = Date.now() - startTime;
                         try {
-                            resolve({ statusCode: res.statusCode, body: body ? JSON.parse(body) : {} });
+                            resolve({ statusCode: res.statusCode, latencyMs, body: body ? JSON.parse(body) : {} });
                         } catch (error) {
-                            resolve({ statusCode: res.statusCode, body });
+                            resolve({ statusCode: res.statusCode, latencyMs, body });
                         }
                     });
                 }
@@ -198,7 +212,7 @@ async function checkDeviceStatus() {
         });
 
         const connected = response.statusCode >= 200 && response.statusCode < 300;
-        return { connected, statusCode: response.statusCode, details: response.body };
+        return { connected, statusCode: response.statusCode, latencyMs: response.latencyMs, details: response.body };
     } catch (error) {
         return { connected: false, reason: error.message };
     }
@@ -217,10 +231,12 @@ exports.handler = async (event) => {
     }
 
     if (event.httpMethod === 'GET') {
+        const startTime = Date.now();
         const state = readState();
         const health = await checkDeviceHealth();
         const status = await checkDeviceStatus();
         const details = status.connected && status.details ? status.details : {};
+        const totalDuration = Date.now() - startTime;
 
         return {
             statusCode: 200,
@@ -230,6 +246,8 @@ exports.handler = async (event) => {
                 ...details,
                 deviceReachable: health.connected,
                 connectionStatus: health.connected ? 'online' : 'offline',
+                gatewayLatencyMs: health.latencyMs || totalDuration,
+                targetUrl: getDeviceBaseUrl() || 'Not Configured',
                 health,
             }),
         };
@@ -246,8 +264,9 @@ exports.handler = async (event) => {
 
         const action = payload.action || event.queryStringParameters?.action;
         const mode = payload.mode || event.queryStringParameters?.mode;
+        const target = payload.target || event.queryStringParameters?.target;
         const state = writeState(action || mode || 'status');
-        const forwarded = await forwardToDevice(action || mode, mode ? mode : undefined);
+        const forwarded = await forwardToDevice(action || mode, mode ? mode : undefined, target);
 
         return {
             statusCode: 200,

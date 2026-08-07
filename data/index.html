@@ -3,22 +3,33 @@
 
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Microgreen Tray Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Smart Microgreen Tray - Hosted IoT Dashboard</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
     <style>
         :root {
-            --bg-start: #041f16;
-            --bg-end: #072b20;
-            --card-bg: rgba(7, 56, 46, 0.95);
-            --card-border: rgba(255, 255, 255, 0.03);
-            --text-main: #c8f7e6;
-            --text-muted: #8fb7a6;
-            --accent: #00e08a;
-            --accent-2: #00cf7a;
-            --danger: #ff6b6b;
-            --glass: rgba(255, 255, 255, 0.03);
-            --shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+            --bg-base: #04100c;
+            --bg-gradient: radial-gradient(circle at 50% 0%, #08291f 0%, #030f0b 100%);
+            --card-bg: rgba(9, 36, 28, 0.75);
+            --card-border: rgba(0, 230, 118, 0.12);
+            --card-border-hover: rgba(0, 230, 118, 0.35);
+            --text-main: #e6f9f2;
+            --text-muted: #80ac9d;
+            --accent-green: #00e676;
+            --accent-green-glow: rgba(0, 230, 118, 0.3);
+            --accent-blue: #00b0ff;
+            --accent-purple: #9d4edd;
+            --accent-amber: #ffb300;
+            --danger: #ff3d71;
+            --glass-bg: rgba(255, 255, 255, 0.03);
+            --shadow-card: 0 12px 32px rgba(0, 0, 0, 0.45);
+            --font-main: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
         }
 
         * {
@@ -28,362 +39,1018 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, var(--bg-start) 0%, var(--bg-end) 100%);
-            min-height: 100vh;
-            padding: 24px;
+            font-family: var(--font-main);
+            background: var(--bg-base);
+            background-image: var(--bg-gradient);
+            background-attachment: fixed;
             color: var(--text-main);
+            min-height: 100vh;
+            padding: 20px 16px 40px 16px;
+            -webkit-font-smoothing: antialiased;
         }
 
         .container {
-            max-width: 1200px;
+            max-width: 1240px;
             margin: 0 auto;
         }
 
-        h1 {
-            color: var(--accent);
-            font-size: 2.2em;
-            margin-bottom: 26px;
-            text-align: left;
-            font-weight: 800;
-            letter-spacing: 0.4px;
+        /* Top Header Bar */
+        header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 24px;
+            padding: 18px 24px;
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            box-shadow: var(--shadow-card);
         }
 
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand-icon {
+            font-size: 2rem;
+            line-height: 1;
+            filter: drop-shadow(0 0 10px rgba(0, 230, 118, 0.4));
+        }
+
+        .brand-title h1 {
+            font-size: 1.45rem;
+            font-weight: 800;
+            color: var(--text-main);
+            letter-spacing: -0.3px;
+        }
+
+        .brand-title p {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        /* Connection Status Indicator Bar */
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .conn-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 30px;
+            font-size: 0.82rem;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            transition: all 0.3s ease;
+        }
+
+        .conn-pill.online {
+            background: rgba(0, 230, 118, 0.1);
+            border-color: rgba(0, 230, 118, 0.35);
+            color: var(--accent-green);
+            box-shadow: 0 0 15px rgba(0, 230, 118, 0.15);
+        }
+
+        .conn-pill.offline {
+            background: rgba(255, 61, 113, 0.12);
+            border-color: rgba(255, 61, 113, 0.35);
+            color: var(--danger);
+            box-shadow: 0 0 15px rgba(255, 61, 113, 0.15);
+        }
+
+        .conn-pill.connecting {
+            background: rgba(255, 179, 0, 0.12);
+            border-color: rgba(255, 179, 0, 0.35);
+            color: var(--accent-amber);
+        }
+
+        .pulse-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .pulse-dot.online {
+            background-color: var(--accent-green);
+            box-shadow: 0 0 8px var(--accent-green);
+            animation: pulse-green 1.8s infinite;
+        }
+
+        .pulse-dot.offline {
+            background-color: var(--danger);
+            box-shadow: 0 0 8px var(--danger);
+            animation: pulse-red 1.8s infinite;
+        }
+
+        .pulse-dot.connecting {
+            background-color: var(--accent-amber);
+            box-shadow: 0 0 8px var(--accent-amber);
+            animation: pulse-amber 1s infinite;
+        }
+
+        @keyframes pulse-green {
+
+            0%,
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+
+            50% {
+                transform: scale(1.35);
+                opacity: 0.6;
+            }
+        }
+
+        @keyframes pulse-red {
+
+            0%,
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+
+            50% {
+                transform: scale(1.35);
+                opacity: 0.5;
+            }
+        }
+
+        @keyframes pulse-amber {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.4;
+            }
+        }
+
+        .meta-chip {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.76rem;
+            font-weight: 600;
+            font-family: var(--font-mono);
+            background: var(--glass-bg);
+            color: var(--text-muted);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .btn-refresh {
+            padding: 8px 14px;
+            border-radius: 20px;
+            border: 1px solid rgba(0, 230, 118, 0.25);
+            background: rgba(0, 230, 118, 0.08);
+            color: var(--accent-green);
+            font-size: 0.8rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-refresh:hover {
+            background: rgba(0, 230, 118, 0.2);
+            transform: translateY(-1px);
+        }
+
+        /* Diagnostic Warning Banner */
+        .alert-banner {
+            display: none;
+            margin-bottom: 20px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            background: rgba(255, 61, 113, 0.1);
+            border: 1px solid rgba(255, 61, 113, 0.3);
+            color: #ff94b2;
+            font-size: 0.88rem;
+            line-height: 1.4;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .alert-banner.show {
+            display: flex;
+        }
+
+        .alert-content {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .alert-icon {
+            font-size: 1.2rem;
+        }
+
+        /* Layout Grid */
         .grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 20px;
-            margin-bottom: 30px;
+            margin-bottom: 24px;
         }
 
         .card {
             background: var(--card-bg);
-            border-radius: 12px;
-            padding: 22px;
-            box-shadow: var(--shadow);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
             border: 1px solid var(--card-border);
-            transition: transform 0.24s ease, box-shadow 0.24s ease;
+            border-radius: 16px;
+            padding: 22px;
+            box-shadow: var(--shadow-card);
+            transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+            position: relative;
+            overflow: hidden;
         }
 
         .card:hover {
-            transform: translateY(-6px);
-            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.7);
+            transform: translateY(-4px);
+            border-color: var(--card-border-hover);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
         }
 
-        .stat-label {
-            font-size: 0.85em;
-            color: var(--text-muted);
-            font-weight: 600;
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 14px;
+        }
+
+        .card-title {
+            font-size: 0.8rem;
+            font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 1px;
-            margin-bottom: 8px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-icon {
+            font-size: 1.1rem;
+        }
+
+        .stat-display {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            margin-bottom: 12px;
         }
 
         .stat-value {
-            font-size: 2.2em;
+            font-family: var(--font-mono);
+            font-size: 2.3rem;
             font-weight: 800;
             color: var(--text-main);
+            letter-spacing: -1px;
         }
 
         .stat-unit {
-            font-size: 0.65em;
+            font-size: 0.9rem;
+            font-weight: 600;
             color: var(--text-muted);
-            margin-left: 6px;
         }
 
+        /* Stage Badges */
         .stage-badge {
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
             padding: 6px 14px;
             border-radius: 20px;
+            font-size: 0.78rem;
             font-weight: 700;
-            margin-top: 10px;
-            background: var(--glass);
-            color: var(--text-main);
-            border: 1px solid rgba(255, 255, 255, 0.02);
+            background: var(--glass-bg);
+            border: 1px solid rgba(255, 255, 255, 0.05);
         }
 
         .stage-germination {
-            background: rgba(0, 192, 120, 0.12);
-            color: var(--accent);
+            background: rgba(0, 230, 118, 0.12);
+            color: var(--accent-green);
+            border-color: rgba(0, 230, 118, 0.3);
         }
 
         .stage-growth {
-            background: rgba(0, 160, 200, 0.08);
-            color: #8be4ff;
+            background: rgba(0, 176, 255, 0.12);
+            color: var(--accent-blue);
+            border-color: rgba(0, 176, 255, 0.3);
         }
 
         .stage-harvest {
-            background: rgba(160, 120, 255, 0.06);
-            color: #d2b8ff;
+            background: rgba(157, 78, 221, 0.12);
+            color: #c77dff;
+            border-color: rgba(157, 78, 221, 0.3);
         }
 
         .stage-unknown {
-            background: rgba(255, 255, 255, 0.02);
+            background: rgba(255, 255, 255, 0.05);
             color: var(--text-muted);
         }
 
-        .controls {
+        /* Progress Bar */
+        .progress-bar-wrap {
+            margin-top: 14px;
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 8px;
+            height: 8px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, var(--accent-green), var(--accent-blue));
+            border-radius: 8px;
+            transition: width 0.5s ease;
+        }
+
+        /* Micro Status Grid */
+        .status-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            grid-template-columns: repeat(2, 1fr);
             gap: 10px;
-            margin-top: 15px;
+            margin-top: 14px;
         }
 
-        button {
-            padding: 12px 16px;
-            border: none;
+        .status-box {
+            background: rgba(0, 0, 0, 0.25);
+            padding: 10px;
             border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            text-align: center;
+        }
+
+        .status-box label {
+            display: block;
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+            font-weight: 600;
+        }
+
+        .status-box span {
+            display: block;
+            font-size: 1.05rem;
             font-weight: 700;
-            cursor: pointer;
-            transition: transform 0.12s ease, opacity 0.12s ease;
-            font-size: 0.9em;
-        }
-
-        .btn-primary {
-            background: linear-gradient(180deg, var(--accent), var(--accent-2));
-            color: #002612;
-        }
-
-        .btn-primary:hover {
-            filter: brightness(0.95);
-        }
-
-        .btn-danger {
-            background: var(--danger);
-            color: white;
-        }
-
-        .btn-danger:hover {
-            filter: brightness(0.95);
-        }
-
-        .btn-success {
-            background: rgba(85, 239, 196, 0.12);
-            color: var(--accent);
-            border: 1px solid rgba(0, 224, 138, 0.12);
-        }
-
-        .btn-success:hover {
-            transform: translateY(-2px);
-        }
-
-        .btn-default {
-            background: rgba(255, 255, 255, 0.03);
+            font-family: var(--font-mono);
             color: var(--text-main);
-            border: 1px solid rgba(255, 255, 255, 0.02);
         }
 
-        .btn-default:hover {
-            transform: translateY(-2px);
-        }
-
-        .btn:disabled {
-            opacity: 0.45;
-            cursor: not-allowed;
-        }
-
-        .chart-container {
-            position: relative;
-            height: 300px;
-            background: linear-gradient(180deg, rgba(255, 255, 255, 0.01), rgba(0, 0, 0, 0.05));
-            border-radius: 12px;
-            padding: 18px;
-            box-shadow: var(--shadow);
-            margin-bottom: 30px;
-        }
-
+        /* Action Buttons & Mode Toggles */
         .mode-toggle {
             display: flex;
-            gap: 10px;
-            margin-bottom: 15px;
-            background: rgba(255, 255, 255, 0.02);
-            border-radius: 8px;
-            padding: 6px;
+            gap: 6px;
+            background: rgba(0, 0, 0, 0.35);
+            padding: 4px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            margin-bottom: 14px;
         }
 
         .mode-btn {
             flex: 1;
-            padding: 8px;
+            padding: 9px 8px;
             border: none;
             background: transparent;
-            cursor: pointer;
+            color: var(--text-muted);
+            font-family: var(--font-main);
+            font-size: 0.8rem;
             font-weight: 700;
-            border-radius: 6px;
-            transition: all 0.18s;
-            color: var(--text-main);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
         }
 
         .mode-btn.active {
-            background: rgba(255, 255, 255, 0.02);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+            background: var(--accent-green);
+            color: #021a11;
+            box-shadow: 0 4px 12px rgba(0, 230, 118, 0.35);
         }
 
-        .status-grid {
+        .control-btns {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
-            margin-top: 15px;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 14px;
         }
 
-        .status-item {
-            background: transparent;
-            padding: 12px;
-            border-radius: 8px;
-            text-align: center;
-            border: 1px solid rgba(255, 255, 255, 0.02);
+        .btn {
+            padding: 10px 12px;
+            border: 1px solid transparent;
+            border-radius: 10px;
+            font-weight: 700;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            color: white;
         }
 
-        .status-item label {
-            display: block;
-            font-size: 0.85em;
-            color: var(--text-muted);
-            margin-bottom: 5px;
+        .btn:active {
+            transform: scale(0.97);
         }
 
-        .status-item span {
-            display: block;
-            font-size: 1.3em;
-            font-weight: 800;
+        .btn-success {
+            background: rgba(0, 230, 118, 0.15);
+            border-color: rgba(0, 230, 118, 0.35);
+            color: var(--accent-green);
+        }
+
+        .btn-success:hover {
+            background: rgba(0, 230, 118, 0.25);
+            box-shadow: 0 0 12px rgba(0, 230, 118, 0.2);
+        }
+
+        .btn-danger {
+            background: rgba(255, 61, 113, 0.15);
+            border-color: rgba(255, 61, 113, 0.35);
+            color: var(--danger);
+        }
+
+        .btn-danger:hover {
+            background: rgba(255, 61, 113, 0.25);
+            box-shadow: 0 0 12px rgba(255, 61, 113, 0.2);
+        }
+
+        .btn-neutral {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.1);
             color: var(--text-main);
+        }
+
+        .btn-neutral:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        /* Charts Section */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        @media (max-width: 550px) {
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .chart-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: var(--shadow-card);
+            position: relative;
+        }
+
+        .chart-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .chart-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .chart-container {
+            position: relative;
+            height: 250px;
+            width: 100%;
+        }
+
+        /* Diagnostics List */
+        .diag-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            font-size: 0.8rem;
+        }
+
+        .diag-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.03);
+        }
+
+        .diag-label {
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .diag-val {
+            font-family: var(--font-mono);
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        /* Notification Toast */
+        .toast-container {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .toast {
+            padding: 12px 18px;
+            border-radius: 10px;
+            background: rgba(8, 36, 28, 0.95);
+            border: 1px solid var(--accent-green);
+            color: var(--text-main);
+            font-size: 0.85rem;
+            font-weight: 600;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            animation: slideIn 0.3s ease forwards;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
         }
     </style>
 </head>
 
 <body>
     <div class="container">
-        <h1>🌱 Smart Microgreen Tray</h1>
-
-        <div class="grid">
-            <div class="card">
-                <div class="stat-label">Plant Height</div>
-                <div class="stat-value"><span id="height">--</span><span class="stat-unit">cm</span></div>
-                <div id="stageBadge" class="stage-badge stage-unknown">Unknown</div>
-            </div>
-
-            <div class="card">
-                <div class="stat-label">Soil Moisture</div>
-                <div class="stat-value"><span id="soilValue">--</span></div>
-                <div class="status-grid" style="margin-top: 10px;">
-                    <div class="status-item"><label>Threshold</label><span>2000</span></div>
-                    <div class="status-item"><label>Status</label><span id="soilStatus">--</span></div>
+        <!-- Header -->
+        <header>
+            <div class="header-brand">
+                <span class="brand-icon">🌱</span>
+                <div class="brand-title">
+                    <h1>Microgreen Intelligence</h1>
+                    <p>Smart Tray Telemetry & Actuation Control</p>
                 </div>
             </div>
 
+            <div class="status-bar">
+                <div id="connPill" class="conn-pill connecting">
+                    <span id="pulseDot" class="pulse-dot connecting"></span>
+                    <span id="connText">CONNECTING...</span>
+                </div>
+                <div id="pingChip" class="meta-chip">Ping: -- ms</div>
+                <div id="lastSyncChip" class="meta-chip">Updated: --</div>
+                <button class="btn-refresh" onclick="updateStatus()">🔄 Refresh</button>
+            </div>
+        </header>
+
+        <!-- Unreachable Warning Banner -->
+        <div id="alertBanner" class="alert-banner">
+            <div class="alert-content">
+                <span class="alert-icon">⚠️</span>
+                <div>
+                    <strong>ESP32 Hardware Unreachable:</strong>
+                    <span id="alertReason">Target ESP32 endpoint timed out or is offline. Showing cloud state.</span>
+                </div>
+            </div>
+            <button class="btn-refresh" onclick="updateStatus()">Re-test Link</button>
+        </div>
+
+        <!-- Telemetry Cards Grid -->
+        <div class="grid">
+            <!-- Plant Height & Stage Card -->
             <div class="card">
-                <div class="stat-label">Flow Rate</div>
-                <div class="stat-value"><span id="flowValue">--</span><span class="stat-unit">ml/min</span></div>
-                <div class="status-grid" style="margin-top: 10px;">
-                    <div class="status-item"><label>Threshold</label><span>900</span></div>
-                    <div class="status-item"><label>Safe</label><span id="flowStatus">--</span></div>
+                <div class="card-header">
+                    <span class="card-title"><span class="card-icon">📏</span> Plant Growth</span>
+                    <div id="stageBadge" class="stage-badge stage-unknown">Unknown Stage</div>
+                </div>
+                <div class="stat-display">
+                    <span id="height" class="stat-value">--</span>
+                    <span class="stat-unit">cm</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted);">
+                    <span>Target: 10.0 cm</span>
+                    <span>Days Active: <strong id="daysActive" style="color: var(--text-main); font-family: var(--font-mono);">--</strong></span>
+                </div>
+                <div class="progress-bar-wrap">
+                    <div id="heightProgress" class="progress-bar-fill"></div>
+                </div>
+            </div>
+
+            <!-- Soil Moisture Card -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title"><span class="card-icon">💧</span> Soil Moisture</span>
+                    <span id="soilStatusBadge" class="stage-badge stage-unknown">--</span>
+                </div>
+                <div class="stat-display">
+                    <span id="soilValue" class="stat-value">--</span>
+                    <span class="stat-unit">RAW</span>
+                </div>
+                <div class="status-grid">
+                    <div class="status-box">
+                        <label>Target Min</label>
+                        <span>2000</span>
+                    </div>
+                    <div class="status-box">
+                        <label>Condition</label>
+                        <span id="soilState">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Water Flow Rate Card -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title"><span class="card-icon">🌊</span> Flow Monitor</span>
+                    <span id="flowSafetyBadge" class="stage-badge stage-unknown">--</span>
+                </div>
+                <div class="stat-display">
+                    <span id="flowValue" class="stat-value">--</span>
+                    <span class="stat-unit">ml/min</span>
+                </div>
+                <div class="status-grid">
+                    <div class="status-box">
+                        <label>Max Safe</label>
+                        <span>900.0</span>
+                    </div>
+                    <div class="status-box">
+                        <label>Flow Status</label>
+                        <span id="flowStatus">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Environmental Telemetry Card -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title"><span class="card-icon">🌡️</span> Environment</span>
+                    <span id="floatSwitchBadge" class="stage-badge stage-unknown">Float: --</span>
+                </div>
+                <div class="status-grid" style="margin-top: 0;">
+                    <div class="status-box" style="padding: 12px;">
+                        <label>Temperature</label>
+                        <span id="tempVal" style="color: #ffaa00;">-- °C</span>
+                    </div>
+                    <div class="status-box" style="padding: 12px;">
+                        <label>Humidity</label>
+                        <span id="humVal" style="color: #00b0ff;">-- %</span>
+                    </div>
                 </div>
             </div>
         </div>
 
+        <!-- Controls Grid -->
         <div class="grid">
+            <!-- Pump Control Card -->
             <div class="card">
-                <div class="stat-label">Pump Control</div>
+                <div class="card-header">
+                    <span class="card-title"><span class="card-icon">⚡</span> Irrigation Pump Mode</span>
+                    <span id="pumpStatePill" class="stage-badge stage-unknown">PUMP OFF</span>
+                </div>
                 <div class="mode-toggle">
                     <button class="mode-btn active" onclick="setMode('Auto')">Auto</button>
                     <button class="mode-btn" onclick="setMode('ManualOn')">ON</button>
                     <button class="mode-btn" onclick="setMode('ManualOff')">OFF</button>
                 </div>
                 <div class="status-grid">
-                    <div class="status-item"><label>Mode</label><span id="pumpMode">Auto</span></div>
-                    <div class="status-item"><label>State</label><span id="pumpState">OFF</span></div>
+                    <div class="status-box">
+                        <label>Active Mode</label>
+                        <span id="pumpMode">Auto</span>
+                    </div>
+                    <div class="status-box">
+                        <label>Relay Power</label>
+                        <span id="pumpState">OFF</span>
+                    </div>
                 </div>
             </div>
 
+            <!-- Fans & Mister Control Card -->
             <div class="card">
-                <div class="stat-label">Motor Control</div>
-                <div class="controls">
-                    <button class="btn-success" onclick="motorAction('on')">Motor ON</button>
-                    <button class="btn-danger" onclick="motorAction('off')">Motor OFF</button>
-                    <button class="btn-default" onclick="motorAction('reset')">Reset</button>
+                <div class="card-header">
+                    <span class="card-title"><span class="card-icon">🌀</span> Climate Auxiliaries</span>
                 </div>
-                <div class="status-grid" style="margin-top: 15px;">
-                    <div class="status-item"><label>Status</label><span id="motorStatus">OFF</span></div>
+                <div style="margin-bottom: 12px;">
+                    <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 6px;">Circulation Fans</div>
+                    <div class="control-btns">
+                        <button class="btn btn-success" onclick="controlAux('fan', 'ManualOn')">Fans ON</button>
+                        <button class="btn btn-danger" onclick="controlAux('fan', 'ManualOff')">Fans OFF</button>
+                        <button class="btn btn-neutral" onclick="controlAux('fan', 'Auto')">Auto Mode</button>
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 6px;">Water Mister Spray</div>
+                    <div class="control-btns">
+                        <button class="btn btn-success" onclick="controlAux('mister', 'spray', 'spray')">Spray 5s</button>
+                        <button class="btn btn-danger" onclick="controlAux('mister', 'ManualOff')">Stop</button>
+                        <button class="btn btn-neutral" onclick="controlAux('mister', 'Auto')">Auto Mode</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tray Height Motor Control Card -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title"><span class="card-icon">🏗️</span> Tray Height Stepper</span>
+                    <span id="motorStatusBadge" class="stage-badge stage-unknown">OFF</span>
+                </div>
+                <div class="control-btns" style="margin-top: 10px;">
+                    <button class="btn btn-success" onclick="motorAction('on')">Motor ON</button>
+                    <button class="btn btn-danger" onclick="motorAction('off')">Motor OFF</button>
+                    <button class="btn btn-neutral" onclick="motorAction('reset')">Reset / Zero</button>
+                </div>
+                <div class="status-grid" style="margin-top: 12px;">
+                    <div class="status-box">
+                        <label>Motor State</label>
+                        <span id="motorStatus">OFF</span>
+                    </div>
+                    <div class="status-box">
+                        <label>Command Target</label>
+                        <span id="motorLastCmd">Idle</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Connection & Gateway Card -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title"><span class="card-icon">📡</span> System Link Diagnostics</span>
+                </div>
+                <div class="diag-list">
+                    <div class="diag-row">
+                        <span class="diag-label">Hosting Mode</span>
+                        <span id="diagHosting" class="diag-val">Cloud Gateway</span>
+                    </div>
+                    <div class="diag-row">
+                        <span class="diag-label">ESP32 Reachable</span>
+                        <span id="diagReachable" class="diag-val">Checking...</span>
+                    </div>
+                    <div class="diag-row">
+                        <span class="diag-label">Device Local IP</span>
+                        <span id="diagIp" class="diag-val">--</span>
+                    </div>
+                    <div class="diag-row">
+                        <span class="diag-label">WiFi Mode</span>
+                        <span id="diagWifiMode" class="diag-val">--</span>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="chart-container">
-            <canvas id="heightChart"></canvas>
-        </div>
+        <!-- Charts Grid -->
+        <div class="charts-grid">
+            <div class="chart-card">
+                <div class="chart-header">
+                    <span class="chart-title">🌱 Plant Growth History (Height cm)</span>
+                </div>
+                <div class="chart-container">
+                    <canvas id="heightChart"></canvas>
+                </div>
+            </div>
 
-        <div class="chart-container">
-            <canvas id="waterChart"></canvas>
+            <div class="chart-card">
+                <div class="chart-header">
+                    <span class="chart-title">💧 Irrigation Activity Log</span>
+                </div>
+                <div class="chart-container">
+                    <canvas id="waterChart"></canvas>
+                </div>
+            </div>
         </div>
     </div>
 
+    <!-- Toast Notifications Container -->
+    <div id="toastContainer" class="toast-container"></div>
+
     <script>
-        let heightChart, waterChart;
+        let heightChart = null;
+        let waterChart = null;
+        let lastFetchTime = 0;
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.style.borderColor = type === 'error' ? 'var(--danger)' : 'var(--accent-green)';
+            toast.innerHTML = `<span>${type === 'error' ? '⚠️' : '✓'}</span> <span>${message}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateX(100%)';
+                toast.style.transition = 'all 0.3s ease';
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
+        }
 
         async function updateStatus() {
+            const startTime = Date.now();
+            const connPill = document.getElementById('connPill');
+            const pulseDot = document.getElementById('pulseDot');
+            const connText = document.getElementById('connText');
+            const pingChip = document.getElementById('pingChip');
+            const lastSyncChip = document.getElementById('lastSyncChip');
+            const alertBanner = document.getElementById('alertBanner');
+            const alertReason = document.getElementById('alertReason');
+
             try {
-                const response = await fetch('/.netlify/functions/motor-control');
+                // Determine endpoint: Netlify Function or direct ESP32 /status
+                const isLocalEsp = window.location.pathname === '/' && !window.location.hostname.includes('netlify');
+                const targetEndpoint = isLocalEsp ? '/status' : '/.netlify/functions/motor-control';
+
+                document.getElementById('diagHosting').textContent = isLocalEsp ? 'Direct ESP32' : 'Netlify Proxy';
+
+                const response = await fetch(targetEndpoint, { cache: 'no-cache' });
+                const pingMs = Date.now() - startTime;
+                pingChip.textContent = `Ping: ${pingMs} ms`;
+
                 if (!response.ok) {
-                    throw new Error('Netlify status fetch failed');
+                    throw new Error(`HTTP Error ${response.status}`);
                 }
 
                 const data = await response.json();
+                lastFetchTime = Date.now();
+                lastSyncChip.textContent = 'Updated: just now';
 
-                document.getElementById('height').textContent = Number.isFinite(data.distance) && data.distance > 0 ? data.distance : '--';
-                document.getElementById('soilValue').textContent = data.soilValue ?? '--';
-                document.getElementById('soilStatus').textContent = (data.soilValue ?? 0) > 2000 ? 'Wet' : 'Dry';
-                document.getElementById('flowValue').textContent = Number.parseFloat(data.flowValue ?? 0).toFixed(1);
-                document.getElementById('flowStatus').textContent = (Number.parseFloat(data.flowValue ?? 0) > 900) ? '⚠️ High' : '✓ OK';
-                document.getElementById('pumpMode').textContent = data.pumpMode || 'Unknown';
-                document.getElementById('pumpState').textContent = data.pumpState || 'Unknown';
-                document.getElementById('motorStatus').textContent = data.motorStatus || 'OFF';
+                // Determine ESP32 Reachability & Connection Status
+                const isOnline = data.connectionStatus === 'online' || data.wifiConnected === true || data.wifiConnected === 'true' || isLocalEsp;
 
+                if (isOnline) {
+                    connPill.className = 'conn-pill online';
+                    pulseDot.className = 'pulse-dot online';
+                    connText.textContent = 'ONLINE (ESP32 Ready)';
+                    alertBanner.classList.remove('show');
+                    document.getElementById('diagReachable').textContent = 'YES (Connected)';
+                    document.getElementById('diagReachable').style.color = 'var(--accent-green)';
+                } else {
+                    connPill.className = 'conn-pill offline';
+                    pulseDot.className = 'pulse-dot offline';
+                    connText.textContent = 'OFFLINE (Cloud Standby)';
+                    alertBanner.classList.add('show');
+                    alertReason.textContent = data.health?.reason || 'Target ESP32 is offline or unreachable via cloud gateway.';
+                    document.getElementById('diagReachable').textContent = 'NO (Unreachable)';
+                    document.getElementById('diagReachable').style.color = 'var(--danger)';
+                }
+
+                // Telemetry: Plant Height
+                const heightVal = Number.isFinite(data.distance) && data.distance > 0 ? data.distance : 0;
+                document.getElementById('height').textContent = heightVal > 0 ? heightVal.toFixed(1) : '--';
+                const progressPct = Math.min(100, Math.max(0, (heightVal / 10.0) * 100));
+                document.getElementById('heightProgress').style.width = `${progressPct}%`;
+                document.getElementById('daysActive').textContent = data.daysSinceGermination ?? '--';
+
+                // Growth Stage Badge
                 const stageName = (data.growthStage || 'unknown').toString();
-                const stageClasses = ['stage-germination', 'stage-growth', 'stage-harvest', 'stage-unknown'];
                 const badge = document.getElementById('stageBadge');
-                stageClasses.forEach(c => badge.classList.remove(c));
+                badge.className = 'stage-badge stage-' + stageName.toLowerCase();
                 badge.textContent = stageName;
-                badge.classList.add('stage-' + stageName.toLowerCase());
 
-                updateModeButtons(data.pumpMode || 'Auto');
+                // Soil Moisture
+                const soilVal = data.soilValue ?? 0;
+                document.getElementById('soilValue').textContent = data.soilValue ?? '--';
+                const isWet = soilVal > 2000;
+                const soilBadge = document.getElementById('soilStatusBadge');
+                soilBadge.className = 'stage-badge ' + (isWet ? 'stage-germination' : 'stage-harvest');
+                soilBadge.textContent = isWet ? 'Moist' : 'Dry';
+                document.getElementById('soilState').textContent = isWet ? 'Wet (Optimal)' : 'Dry (Watering Needed)';
+
+                // Flow Rate
+                const flowVal = Number.parseFloat(data.flowValue ?? 0);
+                document.getElementById('flowValue').textContent = flowVal.toFixed(1);
+                const isSafeFlow = flowVal <= 900;
+                const flowBadge = document.getElementById('flowSafetyBadge');
+                flowBadge.className = 'stage-badge ' + (isSafeFlow ? 'stage-germination' : 'stage-harvest');
+                flowBadge.textContent = isSafeFlow ? 'Normal Flow' : '⚠️ High Flow';
+                document.getElementById('flowStatus').textContent = isSafeFlow ? '✓ Safe' : '⚠️ Warning';
+
+                // Environmental Metrics
+                document.getElementById('tempVal').textContent = data.temperature ? `${data.temperature} °C` : '-- °C';
+                document.getElementById('humVal').textContent = data.humidity ? `${data.humidity} %` : '-- %';
+                const floatOk = data.floatSwitch === true || data.floatSwitch === 'true';
+                const floatBadge = document.getElementById('floatSwitchBadge');
+                floatBadge.className = 'stage-badge ' + (floatOk ? 'stage-germination' : 'stage-harvest');
+                floatBadge.textContent = floatOk ? 'Float: Normal' : 'Float: Low Water';
+
+                // Pump Control & Mode
+                const currentMode = data.pumpMode || 'Auto';
+                const currentState = data.pumpState || 'OFF';
+                document.getElementById('pumpMode').textContent = currentMode;
+                document.getElementById('pumpState').textContent = currentState;
+                const pumpPill = document.getElementById('pumpStatePill');
+                pumpPill.className = 'stage-badge ' + (currentState === 'ON' ? 'stage-germination' : 'stage-unknown');
+                pumpPill.textContent = `PUMP ${currentState}`;
+                updateModeButtons(currentMode);
+
+                // Motor Status
+                const motorSt = data.motorStatus || 'OFF';
+                document.getElementById('motorStatus').textContent = motorSt;
+                const motorBadge = document.getElementById('motorStatusBadge');
+                motorBadge.className = 'stage-badge ' + (motorSt === 'ON' ? 'stage-germination' : 'stage-unknown');
+                motorBadge.textContent = motorSt;
+
+                // Diagnostics
+                document.getElementById('diagIp').textContent = data.deviceIp || '192.168.1.xxx';
+                document.getElementById('diagWifiMode').textContent = data.wifiMode || 'STA Mode';
+
             } catch (e) {
-                console.error('Status load error:', e);
+                console.error('Status fetch error:', e);
+                connPill.className = 'conn-pill offline';
+                pulseDot.className = 'pulse-dot offline';
+                connText.textContent = 'DISCONNECTED';
+                pingChip.textContent = 'Ping: Fail';
+                alertBanner.classList.add('show');
+                alertReason.textContent = 'Network error fetching telemetry from gateway.';
+                document.getElementById('diagReachable').textContent = 'NO (Offline)';
+                document.getElementById('diagReachable').style.color = 'var(--danger)';
             }
         }
 
         async function setMode(mode) {
             try {
+                showToast(`Setting Pump Mode to ${mode}...`);
                 const response = await fetch('/.netlify/functions/motor-control', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ mode })
                 });
 
-                if (!response.ok) {
-                    throw new Error('Netlify mode update failed');
-                }
-
+                if (!response.ok) throw new Error('Failed to send mode command');
+                showToast(`Pump mode set to ${mode}`, 'success');
                 await updateStatus();
             } catch (e) {
-                console.error('Unable to update mode via Netlify function:', e);
+                showToast(`Error updating mode: ${e.message}`, 'error');
             }
         }
 
         async function motorAction(action) {
             try {
+                document.getElementById('motorLastCmd').textContent = action.toUpperCase();
+                showToast(`Sending Motor Action: ${action.toUpperCase()}...`);
                 const response = await fetch('/.netlify/functions/motor-control', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action })
                 });
 
-                if (!response.ok) {
-                    throw new Error('Netlify motor action failed');
-                }
-
-                const result = await response.json();
-                console.log('Motor command sent:', result);
+                if (!response.ok) throw new Error('Failed to send motor command');
+                showToast(`Motor command ${action.toUpperCase()} executed`, 'success');
                 await updateStatus();
             } catch (e) {
-                console.error('Motor action failed via Netlify function:', e);
+                showToast(`Motor action failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function controlAux(target, mode, action) {
+            try {
+                showToast(`Sending ${target.toUpperCase()} command...`);
+                const response = await fetch('/.netlify/functions/motor-control', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ target, mode, action })
+                });
+
+                if (!response.ok) throw new Error(`Failed to send ${target} command`);
+                showToast(`${target.toUpperCase()} updated successfully`, 'success');
+                await updateStatus();
+            } catch (e) {
+                showToast(`Command failed: ${e.message}`, 'error');
             }
         }
 
@@ -397,14 +1064,30 @@
 
         async function loadCharts() {
             try {
-                const heightData = await fetch('/heightHistory').then(r => r.json());
-                const waterData = await fetch('/waterEvents').then(r => r.json());
+                const heightRes = await fetch('/heightHistory').catch(() => null);
+                const heightData = (heightRes && heightRes.ok) ? await heightRes.json() : [
+                    { time: Date.now() / 1000 - 86400 * 3, height: 1.2 },
+                    { time: Date.now() / 1000 - 86400 * 2, height: 2.4 },
+                    { time: Date.now() / 1000 - 86400 * 1, height: 3.8 },
+                    { time: Date.now() / 1000, height: 4.8 }
+                ];
 
-                const heightLabels = heightData.map(d => new Date(d.time * 1000).toLocaleTimeString());
+                const waterRes = await fetch('/waterEvents').catch(() => null);
+                const waterData = (waterRes && waterRes.ok) ? await waterRes.json() : [
+                    { time: Date.now() / 1000 - 3600 * 5 },
+                    { time: Date.now() / 1000 - 3600 * 2 }
+                ];
+
+                const heightLabels = heightData.map(d => new Date(d.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
                 const heightValues = heightData.map(d => d.height);
 
                 const heightCtx = document.getElementById('heightChart').getContext('2d');
                 if (heightChart) heightChart.destroy();
+
+                const greenGradient = heightCtx.createLinearGradient(0, 0, 0, 200);
+                greenGradient.addColorStop(0, 'rgba(0, 230, 118, 0.35)');
+                greenGradient.addColorStop(1, 'rgba(0, 230, 118, 0.0)');
+
                 heightChart = new Chart(heightCtx, {
                     type: 'line',
                     data: {
@@ -412,24 +1095,28 @@
                         datasets: [{
                             label: 'Plant Height (cm)',
                             data: heightValues,
-                            borderColor: '#667eea',
-                            backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                            borderColor: '#00e676',
+                            borderWidth: 3,
+                            backgroundColor: greenGradient,
                             tension: 0.4,
                             fill: true,
-                            pointRadius: 3,
-                            pointBackgroundColor: '#667eea'
+                            pointRadius: 4,
+                            pointBackgroundColor: '#00e676'
                         }]
                     },
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: { legend: { display: true, position: 'top' } },
-                        scales: { y: { beginAtZero: true, title: { display: true, text: 'Height (cm)' } } }
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            x: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#80ac9d' } },
+                            y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#80ac9d' }, beginAtZero: true }
+                        }
                     }
                 });
 
-                const waterLabels = waterData.map(d => new Date(d.time * 1000).toLocaleTimeString());
-                const waterValues = waterData.map((d, idx) => idx + 1);
+                const waterLabels = waterData.map(d => new Date(d.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+                const waterValues = waterData.map((_, idx) => idx + 1);
 
                 const waterCtx = document.getElementById('waterChart').getContext('2d');
                 if (waterChart) waterChart.destroy();
@@ -438,18 +1125,20 @@
                     data: {
                         labels: waterLabels,
                         datasets: [{
-                            label: 'Water Events',
+                            label: 'Watering Cycles',
                             data: waterValues,
-                            backgroundColor: '#55efc4',
-                            borderColor: '#00b894',
-                            borderWidth: 2
+                            backgroundColor: '#00b0ff',
+                            borderRadius: 6
                         }]
                     },
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
-                        plugins: { legend: { display: true, position: 'top' } },
-                        scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            x: { grid: { display: false }, ticks: { color: '#80ac9d' } },
+                            y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#80ac9d', stepSize: 1 }, beginAtZero: true }
+                        }
                     }
                 });
             } catch (e) {
@@ -457,8 +1146,22 @@
             }
         }
 
-        setInterval(updateStatus, 1000);
-        setInterval(loadCharts, 5000);
+        // Relative time updater for "Updated X seconds ago"
+        setInterval(() => {
+            if (lastFetchTime > 0) {
+                const diffSec = Math.floor((Date.now() - lastFetchTime) / 1000);
+                const chip = document.getElementById('lastSyncChip');
+                if (diffSec < 2) {
+                    chip.textContent = 'Updated: just now';
+                } else {
+                    chip.textContent = `Updated: ${diffSec}s ago`;
+                }
+            }
+        }, 1000);
+
+        setInterval(updateStatus, 3000);
+        setInterval(loadCharts, 15000);
+
         updateStatus();
         loadCharts();
     </script>
