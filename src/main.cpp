@@ -52,9 +52,11 @@
 // Germination period for mister operation
 #define GERMINATION_PERIOD_DAYS 3 // days after first motor trigger
 
-// WiFi AP configuration
-const char *WIFI_SSID = "HUAWEI Y9 Prime 2019";
-const char *WIFI_PASSWORD = "lasantha";
+// WiFi configuration
+const char *STA_SSID = "HUAWEI Y9 Prime 2019";
+const char *STA_PASSWORD = "lasantha";
+const char *AP_SSID = "MicrogreenTray_AP";
+const char *AP_PASSWORD = "microgreen123";
 
 WebServer server(80);
 
@@ -1238,8 +1240,8 @@ void setup()
 
   WiFi.mode(WIFI_STA);
   Serial.print("Attempting WiFi STA connect to: ");
-  Serial.println(WIFI_SSID);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.println(STA_SSID);
+  WiFi.begin(STA_SSID, STA_PASSWORD);
   unsigned long staStart = millis();
   const unsigned long STA_TIMEOUT = 15000; // 15s
   while (WiFi.status() != WL_CONNECTED && (millis() - staStart) < STA_TIMEOUT)
@@ -1255,7 +1257,7 @@ void setup()
   {
     Serial.println();
     Serial.print("Connected to WiFi (STA): ");
-    Serial.println(WIFI_SSID);
+    Serial.println(STA_SSID);
     Serial.print("Local IP: ");
     Serial.println(WiFi.localIP());
   }
@@ -1264,8 +1266,8 @@ void setup()
     Serial.println();
     Serial.println("STA connect failed, starting AP fallback");
 
-    IPAddress apIP(192, 168, 4, 1);
-    IPAddress gateway(192, 168, 4, 1);
+    IPAddress apIP(192, 168, 50, 1);
+    IPAddress gateway(192, 168, 50, 1);
     IPAddress subnet(255, 255, 255, 0);
 
     WiFi.mode(WIFI_AP);
@@ -1274,7 +1276,7 @@ void setup()
       Serial.println("Warning: softAPConfig failed");
     }
 
-    bool apStarted = WiFi.softAP(WIFI_SSID, WIFI_PASSWORD);
+    bool apStarted = WiFi.softAP(AP_SSID, AP_PASSWORD);
     if (!apStarted)
     {
       Serial.println("Error: WiFi.softAP failed to start");
@@ -1287,7 +1289,7 @@ void setup()
     }
 
     Serial.print("WiFi AP started: ");
-    Serial.println(WIFI_SSID);
+    Serial.println(AP_SSID);
     Serial.print("AP IP address: ");
     Serial.println(WiFi.softAPIP());
     printWiFiState("AP fallback");
