@@ -60,22 +60,23 @@ const char *STA_PASSWORD = "lasantha";
 const char *AP_SSID = "MicrogreenTray_AP";
 const char *AP_PASSWORD = "microgreen123";
 
-// ==================== Netlify Function Configuration ====================
-// ESP32 pushes telemetry to Netlify and polls for pending commands.
-// This avoids requiring Netlify to reach the board directly from the public internet.
-const char *NETLIFY_FUNCTION_BASE = "https://microgreen-system.netlify.app/.netlify/functions/supabase-sync";
+// ==================== Firebase Realtime Database Configuration ====================
+// ESP32 pushes telemetry to Firebase and polls for pending commands.
+// This avoids requiring the cloud to reach the board directly from the private home network.
+const char *FIREBASE_DB_BASE = "https://microgreen-system-default-rtdb.firebaseio.com";
 
-// Timing for Supabase tasks
+// Timing for Firebase tasks
 unsigned long lastSupabasePushTime = 0;
 const unsigned long SUPABASE_PUSH_INTERVAL = 30000; // 30 seconds
 unsigned long lastCommandPollTime = 0;
 const unsigned long COMMAND_POLL_INTERVAL = 5000; // 5 seconds
 
-// Forward declarations for Supabase helpers (defined after SPIFFS helpers below)
+// Forward declarations for Firebase helpers (defined after SPIFFS helpers below)
 int supabasePost(const char *path, const String &jsonBody);
 int supabasePatch(const char *path, const String &jsonBody);
 String supabaseGet(const char *path);
 void supabasePushWaterEvent(const String &eventType, const String &details);
+void updateFirebaseHeartbeat();
 
 WebServer server(80);
 
@@ -432,8 +433,8 @@ String readWaterEvents()
   return data;
 }
 
-// ==================== Supabase Helper ====================
-// Sends an HTTPS POST to the Netlify sync function.
+// ==================== Firebase Helper ====================
+// Sends an HTTPS POST to the Firebase Realtime Database endpoint.
 // Returns the HTTP response code (-1 on failure).
 int supabasePost(const char *path, const String &jsonBody)
 {
@@ -444,7 +445,7 @@ int supabasePost(const char *path, const String &jsonBody)
   client.setInsecure();
 
   HTTPClient http;
-  String url = String(NETLIFY_FUNCTION_BASE) + path;
+  String url = String(FIREBASE_DB_BASE) + String(path) + ".json";
   http.begin(client, url);
   http.addHeader("Content-Type", "application/json");
   http.setTimeout(8000);
@@ -454,7 +455,7 @@ int supabasePost(const char *path, const String &jsonBody)
   return code;
 }
 
-// Sends an HTTPS PATCH to the Netlify sync function (used to update command status).
+// Sends an HTTPS PATCH to the Firebase Realtime Database endpoint.
 int supabasePatch(const char *path, const String &jsonBody)
 {
   if (WiFi.status() != WL_CONNECTED)
@@ -464,7 +465,7 @@ int supabasePatch(const char *path, const String &jsonBody)
   client.setInsecure();
 
   HTTPClient http;
-  String url = String(NETLIFY_FUNCTION_BASE) + path;
+  String url = String(FIREBASE_DB_BASE) + String(path) + ".json";
   http.begin(client, url);
   http.addHeader("Content-Type", "application/json");
   http.setTimeout(8000);
@@ -484,7 +485,7 @@ String supabaseGet(const char *path)
   client.setInsecure();
 
   HTTPClient http;
-  String url = String(NETLIFY_FUNCTION_BASE) + path;
+  String url = String(FIREBASE_DB_BASE) + String(path) + ".json";
   http.begin(client, url);
   http.addHeader("Accept", "application/json");
   http.setTimeout(8000);
@@ -509,28 +510,29 @@ void supabasePushSensorData()
   dtostrf(temperature, 5, 2, tempStr);
   dtostrf(humidity, 5, 2, humStr);
 
-  // Build compact JSON payload and send it to the Netlify function.
+  // Firebase Realtime Database accepts a JSON object and creates a push key when POST is used.
   char body[320];
   snprintf(body, sizeof(body),
-           "{\"table\":\"sensor_readings\",\"record\":{\"temperature\":%s,\"humidity\":%s,\"flow\":%s,\"soil\":%d,\"height\":%ld,\"stage\":\"%s\"}}",
+           "{\"temperature\":%s,\"humidity\":%s,\"flow\":%s,\"soil\":%d,\"height\":%ld,\"stage\":\"%s\",\"timestamp\":%lu}",
            tempStr, humStr, flowStr,
            analogRead(SOIL_PIN),
            currentHeight,
-           growthStage.c_str());
+           growthStage.c_str(),
+           millis() / 1000);
 
-  int code = supabasePost("", String(body));
+  int code = supabasePost("/sensorReadings", String(body));
   if (code == 201 || code == 200)
   {
-    Serial.println("[Netlify] Sensor data pushed OK");
+    Serial.println("[Firebase] Sensor data pushed OK");
   }
   else
   {
-    Serial.print("[Netlify] Sensor push failed, HTTP code: ");
+    Serial.print("[Firebase] Sensor push failed, HTTP code: ");
     Serial.println(code);
   }
 }
 
-// ==================== Supabase Push: Water Event ====================
+// ==================== Firebase Push: Water Event ====================
 void supabasePushWaterEvent(const String &eventType, const String &details)
 {
   if (WiFi.status() != WL_CONNECTED)
@@ -538,17 +540,41 @@ void supabasePushWaterEvent(const String &eventType, const String &details)
 
   char body[200];
   snprintf(body, sizeof(body),
-           "{\"table\":\"water_events\",\"record\":{\"event_type\":\"%s\",\"details\":\"%s\"}}",
-           eventType.c_str(), details.c_str());
+           "{\"event_type\":\"%s\",\"details\":\"%s\",\"timestamp\":%lu}",
+           eventType.c_str(), details.c_str(), millis() / 1000);
 
-  int code = supabasePost("", String(body));
+  int code = supabasePost("/waterEvents", String(body));
   if (code == 201 || code == 200)
   {
-    Serial.println("[Netlify] Water event pushed OK");
+    Serial.println("[Firebase] Water event pushed OK");
   }
   else
   {
-    Serial.print("[Netlify] Water event push failed, HTTP code: ");
+    Serial.print("[Firebase] Water event push failed, HTTP code: ");
+    Serial.println(code);
+  }
+}
+
+void updateFirebaseHeartbeat()
+{
+  if (WiFi.status() != WL_CONNECTED)
+    return;
+
+  char body[128];
+  snprintf(body, sizeof(body),
+           "{\"online\":true,\"lastSeen\":%lu,\"wifiMode\":\"%s\",\"ip\":\"%s\"}",
+           millis() / 1000,
+           WiFi.getMode() == WIFI_STA ? "STA" : "AP",
+           WiFi.localIP().toString().c_str());
+
+  int code = supabasePost("/deviceStatus", String(body));
+  if (code == 201 || code == 200)
+  {
+    Serial.println("[Firebase] Heartbeat pushed OK");
+  }
+  else
+  {
+    Serial.print("[Firebase] Heartbeat push failed, HTTP code: ");
     Serial.println(code);
   }
 }
@@ -644,33 +670,40 @@ void supabasePollCommands()
   if (WiFi.status() != WL_CONNECTED)
     return;
 
-  // GET the oldest pending command from Netlify function
-  String body = supabaseGet("?table=commands&status=pending");
+  // GET pending commands from Firebase Realtime Database.
+  String body = supabaseGet("/commands");
 
-  if (body.isEmpty() || body == "[]")
+  if (body.isEmpty() || body == "null" || body == "{}")
     return;
 
-  // Parse the JSON array
-  StaticJsonDocument<512> doc;
+  StaticJsonDocument<1024> doc;
   DeserializationError err = deserializeJson(doc, body);
-  if (err || !doc.is<JsonArray>() || doc.as<JsonArray>().size() == 0)
+  if (err || !doc.is<JsonObject>())
     return;
 
-  JsonObject cmd = doc[0].as<JsonObject>();
-  String id = cmd["id"].as<String>();
-  String action = cmd["action"].as<String>();
+  JsonObject commands = doc.as<JsonObject>();
+  for (JsonPair kv : commands)
+  {
+    const char *id = kv.key().c_str();
+    JsonObject cmd = kv.value().as<JsonObject>();
+    const char *action = cmd["action"];
+    const char *status = cmd["status"];
 
-  if (id.isEmpty() || action.isEmpty())
-    return;
+    if (!action || !id)
+      continue;
 
-  // Execute the command on hardware
-  executeCloudCommand(action);
+    if (status && String(status) == "pending")
+    {
+      String actionStr = String(action);
+      executeCloudCommand(actionStr);
 
-  // Mark command as 'executed' in the Netlify function
-  String patchPath = "?table=commands&id=" + id;
-  supabasePatch(patchPath.c_str(), "{\"status\":\"executed\"}");
-  Serial.print("[Netlify] Command marked executed: ");
-  Serial.println(id);
+      String patchPath = "/commands/" + String(id);
+      supabasePatch(patchPath.c_str(), "{\"status\":\"executed\"}");
+      Serial.print("[Firebase] Command marked executed: ");
+      Serial.println(id);
+      break;
+    }
+  }
 }
 
 void handleRoot()
@@ -1879,9 +1912,10 @@ void loop()
     {
       lastSupabasePushTime = now;
       supabasePushSensorData();
+      updateFirebaseHeartbeat();
     }
 
-    // ----- Supabase: Poll for pending commands every 5s -----
+    // ----- Firebase: Poll for pending commands every 5s -----
     if (now - lastCommandPollTime >= COMMAND_POLL_INTERVAL)
     {
       lastCommandPollTime = now;
