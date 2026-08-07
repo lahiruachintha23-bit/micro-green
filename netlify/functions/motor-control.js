@@ -4,30 +4,25 @@ const http = require('http');
 const https = require('https');
 const { createClient } = require('@supabase/supabase-js');
 
+// ==================== Supabase Client ====================
 function getSupabaseClient() {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    if (!supabaseUrl || !supabaseKey) {
-        return null;
-    }
-
+    if (!supabaseUrl || !supabaseKey) return null;
     return createClient(supabaseUrl, supabaseKey);
 }
 
+// ==================== State File (ephemeral, /tmp) ====================
 function getStateFilePath() {
     return path.join('/tmp', 'microgreen-motor-state.json');
 }
 
 function readState() {
     try {
-        const statePath = getStateFilePath();
-        if (!fs.existsSync(statePath)) {
-            return { action: 'none', state: 'UNKNOWN', updatedAt: null };
-        }
-
-        return JSON.parse(fs.readFileSync(statePath, 'utf8'));
-    } catch (error) {
+        const p = getStateFilePath();
+        if (!fs.existsSync(p)) return { action: 'none', state: 'UNKNOWN', updatedAt: null };
+        return JSON.parse(fs.readFileSync(p, 'utf8'));
+    } catch {
         return { action: 'none', state: 'UNKNOWN', updatedAt: null };
     }
 }
@@ -35,272 +30,62 @@ function readState() {
 function writeState(action) {
     const state = {
         action,
-        state: action === 'on' ? 'ON' : action === 'off' ? 'OFF' : 'UNKNOWN',
+        state: action === 'on' || action === 'motor_on' ? 'ON'
+             : action === 'off' || action === 'motor_off' ? 'OFF'
+             : 'UNKNOWN',
         updatedAt: new Date().toISOString(),
     };
-
-    try {
-        fs.writeFileSync(getStateFilePath(), JSON.stringify(state));
-    } catch (e) {
-        // Ignore read-only filesystem errors if any
-    }
+    try { fs.writeFileSync(getStateFilePath(), JSON.stringify(state)); } catch {}
     return state;
 }
 
-function getDeviceBaseUrl() {
-    return process.env.ESP32_CONTROL_URL;
-}
-
-function isPrivateHost(hostname) {
-    if (!hostname) return true;
-    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.endsWith('.local')) return true;
-    if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
-    if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
-    if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
-    return false;
-}
-
-function forwardToDevice(action, mode, target) {
-    return new Promise((resolve) => {
-        const targetUrl = getDeviceBaseUrl();
-        if (!targetUrl) {
-            resolve({ ok: false, reason: 'No ESP32_CONTROL_URL configured in Netlify environment variables.' });
-            return;
-        }
-
-        let url;
-        try {
-            url = new URL(targetUrl);
-        } catch (e) {
-            resolve({ ok: false, reason: `Invalid ESP32_CONTROL_URL format: ${targetUrl}` });
-            return;
-        }
-
-        if (isPrivateHost(url.hostname)) {
-            resolve({ ok: false, reason: `ESP32 target URL (${url.hostname}) is a private local IP. Netlify cloud servers cannot reach local LAN IPs directly.` });
-            return;
-        }
-
-        let requestPath = url.pathname || '/';
-        let requestQuery = {};
-
-        if (target === 'fan' || action === 'fan') {
-            requestPath = `${requestPath.replace(/\/$/, '')}/fan`;
-            if (mode) requestQuery.mode = mode;
-        } else if (target === 'mister' || action === 'mister') {
-            requestPath = `${requestPath.replace(/\/$/, '')}/mister`;
-            if (action && action !== 'mister') requestQuery.action = action;
-            if (mode) requestQuery.mode = mode;
-        } else if (mode) {
-            requestPath = `${requestPath.replace(/\/$/, '')}/control`;
-            requestQuery.mode = mode;
-        } else if (['on', 'off', 'reset'].includes(action)) {
-            requestPath = `${requestPath.replace(/\/$/, '')}/motor`;
-            requestQuery.action = action;
-        } else if (['Auto', 'ManualOn', 'ManualOff'].includes(action)) {
-            requestPath = `${requestPath.replace(/\/$/, '')}/control`;
-            requestQuery.mode = action;
-        }
-
-        const client = url.protocol === 'https:' ? https : http;
-        const startTime = Date.now();
-        const request = client.request(
-            {
-                hostname: url.hostname,
-                port: url.port || (url.protocol === 'https:' ? 443 : 80),
-                path: `${requestPath}?${new URLSearchParams(requestQuery).toString()}`,
-                method: 'GET',
-                timeout: 2500,
-            },
-            (response) => {
-                let body = '';
-                response.on('data', (chunk) => { body += chunk; });
-                response.on('end', () => {
-                    const latencyMs = Date.now() - startTime;
-                    resolve({ ok: response.statusCode >= 200 && response.statusCode < 300, statusCode: response.statusCode, latencyMs, body });
-                });
-            }
-        );
-
-        request.on('timeout', () => {
-            request.destroy();
-            resolve({ ok: false, reason: 'ESP32 request timed out (2.5s)' });
-        });
-
-        request.on('error', (err) => {
-            resolve({ ok: false, reason: `ESP32 connection error: ${err.message}` });
-        });
-
-        request.end();
-    });
-}
-
-async function checkDeviceHealth() {
-    const targetUrl = getDeviceBaseUrl();
-    if (!targetUrl) {
-        return { connected: false, reason: 'No ESP32_CONTROL_URL configured in Netlify environment variables.' };
-    }
-
-    try {
-        const url = new URL(targetUrl);
-        if (isPrivateHost(url.hostname)) {
-            return {
-                connected: false,
-                reason: `ESP32 target URL (${targetUrl}) is a private local LAN IP. Netlify cloud servers cannot reach private IPs directly. Use direct local mode or configure a public tunnel.`,
-                isPrivateIp: true
-            };
-        }
-
-        const client = url.protocol === 'https:' ? https : http;
-        const startTime = Date.now();
-
-        const response = await new Promise((resolve) => {
-            const request = client.request(
-                {
-                    hostname: url.hostname,
-                    port: url.port || (url.protocol === 'https:' ? 443 : 80),
-                    path: `${url.pathname.replace(/\/$/, '')}/health`,
-                    method: 'GET',
-                    timeout: 2500,
-                },
-                (res) => {
-                    let body = '';
-                    res.on('data', (chunk) => { body += chunk; });
-                    res.on('end', () => {
-                        const latencyMs = Date.now() - startTime;
-                        try {
-                            resolve({ statusCode: res.statusCode, latencyMs, body: body ? JSON.parse(body) : {} });
-                        } catch (error) {
-                            resolve({ statusCode: res.statusCode, latencyMs, body });
-                        }
-                    });
-                }
-            );
-
-            request.on('timeout', () => {
-                request.destroy();
-                resolve({ statusCode: 504, reason: 'ESP32 health check timed out (2.5s)' });
-            });
-            request.on('error', (err) => resolve({ statusCode: 502, reason: err.message }));
-            request.end();
-        });
-
-        const connected = response.statusCode >= 200 && response.statusCode < 300;
-        return {
-            connected,
-            statusCode: response.statusCode,
-            latencyMs: response.latencyMs,
-            details: response.body,
-            reason: response.reason
-        };
-    } catch (error) {
-        return { connected: false, reason: error.message };
-    }
-}
-
-async function checkDeviceStatus() {
-    const targetUrl = getDeviceBaseUrl();
-    if (!targetUrl) {
-        return { connected: false, reason: 'No ESP32_CONTROL_URL configured in Netlify environment variables.' };
-    }
-
-    try {
-        const url = new URL(targetUrl);
-        if (isPrivateHost(url.hostname)) {
-            return { connected: false, reason: 'Private IP target' };
-        }
-
-        const client = url.protocol === 'https:' ? https : http;
-        const startTime = Date.now();
-
-        const response = await new Promise((resolve) => {
-            const request = client.request(
-                {
-                    hostname: url.hostname,
-                    port: url.port || (url.protocol === 'https:' ? 443 : 80),
-                    path: `${url.pathname.replace(/\/$/, '')}/status`,
-                    method: 'GET',
-                    timeout: 2500,
-                },
-                (res) => {
-                    let body = '';
-                    res.on('data', (chunk) => { body += chunk; });
-                    res.on('end', () => {
-                        const latencyMs = Date.now() - startTime;
-                        try {
-                            resolve({ statusCode: res.statusCode, latencyMs, body: body ? JSON.parse(body) : {} });
-                        } catch (error) {
-                            resolve({ statusCode: res.statusCode, latencyMs, body });
-                        }
-                    });
-                }
-            );
-
-            request.on('timeout', () => {
-                request.destroy();
-                resolve({ statusCode: 504, reason: 'ESP32 status check timed out (2.5s)' });
-            });
-            request.on('error', (err) => resolve({ statusCode: 502, reason: err.message }));
-            request.end();
-        });
-
-        const connected = response.statusCode >= 200 && response.statusCode < 300;
-        return { connected, statusCode: response.statusCode, latencyMs: response.latencyMs, details: response.body };
-    } catch (error) {
-        return { connected: false, reason: error.message };
-    }
-}
-
-async function syncToSupabaseIfConnected(telemetry) {
-    const supabase = getSupabaseClient();
-    if (!supabase || !telemetry) return false;
-
-    try {
-        const record = {
-            temperature: telemetry.temperature ? parseFloat(telemetry.temperature) : null,
-            humidity: telemetry.humidity ? parseFloat(telemetry.humidity) : null,
-            flow: telemetry.flowValue ? parseFloat(telemetry.flowValue) : null,
-            soil: telemetry.soilValue ? parseInt(telemetry.soilValue, 10) : null,
-            height: telemetry.distance ? parseInt(telemetry.distance, 10) : null,
-            stage: telemetry.growthStage || 'Unknown'
-        };
-
-        await supabase.from('sensor_readings').insert([record]);
-        return true;
-    } catch (e) {
-        console.error('Supabase auto-sync error:', e.message);
-        return false;
-    }
-}
-
+// ==================== Supabase: Read Last Sensor Reading ====================
 async function getLastSupabaseTelemetry() {
     const supabase = getSupabaseClient();
     if (!supabase) return null;
-
     try {
         const { data, error } = await supabase
             .from('sensor_readings')
             .select('*')
             .order('recorded_at', { ascending: false })
             .limit(1);
-
         if (error || !data || data.length === 0) return null;
-
         const last = data[0];
         return {
-            distance: last.height,
-            soilValue: last.soil,
-            flowValue: last.flow,
-            temperature: last.temperature,
-            humidity: last.humidity,
-            growthStage: last.stage,
+            distance:     last.height,
+            soilValue:    last.soil,
+            flowValue:    last.flow,
+            temperature:  last.temperature,
+            humidity:     last.humidity,
+            growthStage:  last.stage,
+            recordedAt:   last.recorded_at,
             isStaleDbValue: true
         };
-    } catch (e) {
-        return null;
+    } catch { return null; }
+}
+
+// ==================== Supabase: Write Pending Command ====================
+// Instead of forwarding directly to ESP32 (which is on a private local IP),
+// we write a 'pending' command row. The ESP32 polls Supabase every 5s,
+// finds the row, executes it on the hardware, and marks it 'executed'.
+async function writeCommandToSupabase(action) {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+        return { ok: false, reason: 'Supabase not configured (check SUPABASE_URL and SUPABASE_ANON_KEY in Netlify env vars)' };
+    }
+    try {
+        const { data, error } = await supabase
+            .from('commands')
+            .insert([{ action, status: 'pending' }])
+            .select();
+        if (error) throw error;
+        return { ok: true, commandId: data?.[0]?.id, status: 'pending', note: 'ESP32 will pick this up within 5 seconds' };
+    } catch (err) {
+        return { ok: false, reason: `Supabase write error: ${err.message}` };
     }
 }
 
+// ==================== Main Handler ====================
 exports.handler = async (event) => {
     const headers = {
         'Access-Control-Allow-Origin': '*',
@@ -314,97 +99,115 @@ exports.handler = async (event) => {
     }
 
     try {
+        // ====== GET — return latest status from Supabase ======
         if (event.httpMethod === 'GET') {
-            const startTime = Date.now();
             const state = readState();
-            
-            // Query ESP32 health & status in parallel
-            const [health, status] = await Promise.all([
-                checkDeviceHealth(),
-                checkDeviceStatus()
-            ]);
+            const lastTelemetry = await getLastSupabaseTelemetry();
+            const supabase = getSupabaseClient();
+            const supabaseConfigured = !!supabase;
 
-            const isOnline = health.connected && status.connected;
-            let details = isOnline && status.details ? status.details : {};
-            let storedInSupabase = false;
+            // Check how recent the last reading is (within 60s = device likely online)
+            let deviceReachable = false;
+            let connectionStatus = 'offline';
+            let cloudStorageActive = false;
 
-            if (isOnline) {
-                // Connection is ACTIVE -> Store sensor data in Supabase
-                storedInSupabase = await syncToSupabaseIfConnected(details);
-            } else {
-                // Connection FAILS -> DO NOT STORE DATA.
-                // Fetch last known readings from Supabase to present to user
-                const lastDbReading = await getLastSupabaseTelemetry();
-                if (lastDbReading) {
-                    details = { ...lastDbReading, ...details };
+            if (lastTelemetry && lastTelemetry.recordedAt) {
+                const ageMs = Date.now() - new Date(lastTelemetry.recordedAt).getTime();
+                // If a reading arrived within the last 60 seconds, ESP32 is pushing live
+                if (ageMs < 60000) {
+                    deviceReachable = true;
+                    connectionStatus = 'online';
+                    cloudStorageActive = true;
+                } else if (ageMs < 300000) {
+                    // Reading is 1–5 minutes old — device was recently online
+                    deviceReachable = false;
+                    connectionStatus = 'stale';
+                    cloudStorageActive = false;
                 }
             }
-
-            const totalDuration = Date.now() - startTime;
 
             return {
                 statusCode: 200,
                 headers,
                 body: JSON.stringify({
                     ...state,
-                    ...details,
-                    deviceReachable: isOnline,
-                    connectionStatus: isOnline ? 'online' : 'offline',
-                    cloudStorageActive: isOnline && storedInSupabase,
-                    gatewayLatencyMs: health.latencyMs || totalDuration,
-                    targetUrl: getDeviceBaseUrl() || 'Not Configured',
-                    health,
+                    ...(lastTelemetry || {}),
+                    deviceReachable,
+                    connectionStatus,
+                    cloudStorageActive,
+                    supabaseConfigured,
+                    source: 'supabase-db',
+                    targetUrl: 'Direct ESP32 Push (no tunnel needed)',
+                    health: {
+                        connected: deviceReachable,
+                        reason: deviceReachable
+                            ? 'ESP32 is pushing live data to Supabase'
+                            : lastTelemetry
+                                ? `Last reading: ${lastTelemetry.recordedAt}`
+                                : 'No readings in Supabase yet — ensure ESP32 is powered on and connected to WiFi',
+                    }
                 }),
             };
         }
 
+        // ====== POST — write command to Supabase for ESP32 to pick up ======
         if (event.httpMethod === 'POST') {
             let payload = {};
+            try { payload = event.body ? JSON.parse(event.body) : {}; } catch {}
 
-            try {
-                payload = event.body ? JSON.parse(event.body) : {};
-            } catch (error) {
-                payload = {};
+            const rawAction = payload.action || event.queryStringParameters?.action;
+            const mode      = payload.mode   || event.queryStringParameters?.mode;
+            const target    = payload.target || event.queryStringParameters?.target;
+
+            // Map dashboard actions to Supabase command action strings
+            let commandAction = rawAction || mode || 'status';
+
+            if (target === 'fan') {
+                commandAction = mode === 'ManualOn' ? 'fan_on'
+                              : mode === 'ManualOff' ? 'fan_off'
+                              : 'fan_auto';
+            } else if (target === 'mister') {
+                commandAction = rawAction === 'spray' || mode === 'ManualOn' ? 'mister_spray'
+                              : mode === 'ManualOff' ? 'mister_off'
+                              : 'mister_auto';
+            } else if (mode && !rawAction) {
+                // Pump mode change
+                commandAction = mode === 'ManualOn'  ? 'pump_on'
+                              : mode === 'ManualOff' ? 'pump_off'
+                              : 'pump_auto';
+            } else if (rawAction === 'on') {
+                commandAction = 'motor_on';
+            } else if (rawAction === 'off') {
+                commandAction = 'motor_off';
+            } else if (rawAction === 'reset') {
+                commandAction = 'motor_reset';
             }
 
-            const action = payload.action || event.queryStringParameters?.action;
-            const mode = payload.mode || event.queryStringParameters?.mode;
-            const target = payload.target || event.queryStringParameters?.target;
+            const result = await writeCommandToSupabase(commandAction);
 
-            // Attempt to forward command to ESP32
-            const forwarded = await forwardToDevice(action || mode, mode ? mode : undefined, target);
-
-            let supabaseLogged = false;
-            if (forwarded.ok) {
-                // If command SUCCEEDED on ESP32 -> Log to Supabase commands table
-                const state = writeState(action || mode || 'status');
-                const supabase = getSupabaseClient();
-                if (supabase) {
-                    try {
-                        await supabase.from('commands').insert([{
-                            action: action || mode || 'control',
-                            status: 'executed'
-                        }]);
-                        supabaseLogged = true;
-                    } catch (err) {
-                        console.error('Supabase command log failed:', err.message);
-                    }
-                }
+            if (result.ok) {
+                const state = writeState(commandAction);
                 return {
                     statusCode: 200,
                     headers,
-                    body: JSON.stringify({ ok: true, ...state, forwarded, supabaseLogged, source: 'netlify-function' }),
+                    body: JSON.stringify({
+                        ok: true,
+                        ...state,
+                        commandId: result.commandId,
+                        commandAction,
+                        status: 'pending',
+                        note: 'Command queued in Supabase. ESP32 will execute within 5 seconds.',
+                        source: 'supabase-command-queue'
+                    }),
                 };
             } else {
-                // If ESP32 is UNREACHABLE -> DO NOT write pending command to Supabase
                 return {
                     statusCode: 200,
                     headers,
                     body: JSON.stringify({
                         ok: false,
-                        reason: forwarded.reason || 'ESP32 device unreachable. Command was NOT stored or executed.',
-                        supabaseLogged: false,
-                        forwarded
+                        reason: result.reason,
+                        commandAction,
                     }),
                 };
             }
@@ -415,7 +218,9 @@ exports.handler = async (event) => {
             headers,
             body: JSON.stringify({ ok: false, error: 'Method not allowed' }),
         };
+
     } catch (globalErr) {
+        console.error('[motor-control] Unhandled error:', globalErr.message);
         return {
             statusCode: 200,
             headers,
@@ -423,7 +228,6 @@ exports.handler = async (event) => {
                 connectionStatus: 'offline',
                 deviceReachable: false,
                 cloudStorageActive: false,
-                targetUrl: getDeviceBaseUrl() || 'Not Configured',
                 health: { connected: false, reason: globalErr.message }
             })
         };

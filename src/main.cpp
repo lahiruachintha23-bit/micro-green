@@ -4,6 +4,8 @@
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
 #include "DHT.h"
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 
 // ==================== Pin Definitions ====================
 // Ultrasonic sensor
@@ -57,6 +59,24 @@ const char *STA_SSID = "HUAWEI Y9 Prime 2019";
 const char *STA_PASSWORD = "lasantha";
 const char *AP_SSID = "MicrogreenTray_AP";
 const char *AP_PASSWORD = "microgreen123";
+
+// ==================== Supabase Configuration ====================
+const char *SUPABASE_URL  = "https://fcddmqhsodwqopzyitmn.supabase.co";
+const char *SUPABASE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZjZGRtcWhzb2R3cW9wenlpdG1uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYxMDY4MDQsImV4cCI6MjEwMTY4MjgwNH0.1vIb7YBUvUO-GZ9mjvklYzJxrGbznN5kFjKezXDaEeE";
+// Supabase uses TLS but we accept any root CA on the ESP32 side (insecure mode)
+// for simplicity — switch to certificate pinning in production.
+
+// Timing for Supabase tasks
+unsigned long lastSupabasePushTime  = 0;
+const unsigned long SUPABASE_PUSH_INTERVAL    = 30000; // 30 seconds
+unsigned long lastCommandPollTime   = 0;
+const unsigned long COMMAND_POLL_INTERVAL     = 5000;  // 5 seconds
+
+// Forward declarations for Supabase helpers (defined after SPIFFS helpers below)
+int    supabasePost(const char *path, const String &jsonBody);
+int    supabasePatch(const char *path, const String &jsonBody);
+String supabaseGet(const char *path);
+void   supabasePushWaterEvent(const String &eventType, const String &details);
 
 WebServer server(80);
 
@@ -384,6 +404,9 @@ void logWaterEvent()
   file = SPIFFS.open(WATER_FILE, "w");
   serializeJson(doc, file);
   file.close();
+
+  // Also push to Supabase if WiFi is connected (forward-declared below)
+  supabasePushWaterEvent("pump_on", "Irrigation pump activated");
 }
 
 String readHeightHistory()
@@ -408,6 +431,248 @@ String readWaterEvents()
   String data = file.readString();
   file.close();
   return data;
+}
+
+// ==================== Supabase Helper ====================
+// Sends an HTTPS POST to Supabase REST API.
+// Returns the HTTP response code (-1 on failure).
+int supabasePost(const char *path, const String &jsonBody)
+{
+  if (WiFi.status() != WL_CONNECTED) return -1;
+
+  WiFiClientSecure client;
+  client.setInsecure(); // accept any TLS cert — acceptable for ESP32 IoT
+
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + path;
+  http.begin(client, url);
+  http.addHeader("Content-Type",  "application/json");
+  http.addHeader("apikey",        SUPABASE_KEY);
+  http.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
+  http.addHeader("Prefer",        "return=minimal"); // no body returned → saves RAM
+  http.setTimeout(8000);
+
+  int code = http.POST(jsonBody);
+  http.end();
+  return code;
+}
+
+// Sends an HTTPS PATCH to Supabase REST API (used to update command status).
+int supabasePatch(const char *path, const String &jsonBody)
+{
+  if (WiFi.status() != WL_CONNECTED) return -1;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + path;
+  http.begin(client, url);
+  http.addHeader("Content-Type",  "application/json");
+  http.addHeader("apikey",        SUPABASE_KEY);
+  http.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
+  http.addHeader("Prefer",        "return=minimal");
+  http.setTimeout(8000);
+
+  int code = http.PATCH(jsonBody);
+  http.end();
+  return code;
+}
+
+// Sends an HTTPS GET and returns the response body string.
+String supabaseGet(const char *path)
+{
+  if (WiFi.status() != WL_CONNECTED) return "";
+
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + path;
+  http.begin(client, url);
+  http.addHeader("apikey",        SUPABASE_KEY);
+  http.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
+  http.addHeader("Accept",        "application/json");
+  http.setTimeout(8000);
+
+  int code = http.GET();
+  String body = "";
+  if (code == 200) body = http.getString();
+  http.end();
+  return body;
+}
+
+// ==================== Supabase Push: Sensor Readings ====================
+void supabasePushSensorData()
+{
+  // Guard: Only push if WiFi is connected as STA (not AP-only mode)
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  char flowStr[16], tempStr[16], humStr[16];
+  dtostrf(flow_ml_min, 5, 2, flowStr);
+  dtostrf(temperature, 5, 2, tempStr);
+  dtostrf(humidity,    5, 2, humStr);
+
+  // Build compact JSON payload
+  char body[320];
+  snprintf(body, sizeof(body),
+    "{\"temperature\":%s,\"humidity\":%s,\"flow\":%s,"
+    "\"soil\":%d,\"height\":%ld,\"stage\":\"%s\"}",
+    tempStr, humStr, flowStr,
+    analogRead(SOIL_PIN),
+    currentHeight,
+    growthStage.c_str());
+
+  int code = supabasePost("/rest/v1/sensor_readings", String(body));
+  if (code == 201 || code == 200)
+  {
+    Serial.println("[Supabase] Sensor data pushed OK");
+  }
+  else
+  {
+    Serial.print("[Supabase] Sensor push failed, HTTP code: ");
+    Serial.println(code);
+  }
+}
+
+// ==================== Supabase Push: Water Event ====================
+void supabasePushWaterEvent(const String &eventType, const String &details)
+{
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  char body[200];
+  snprintf(body, sizeof(body),
+    "{\"event_type\":\"%s\",\"details\":\"%s\"}",
+    eventType.c_str(), details.c_str());
+
+  int code = supabasePost("/rest/v1/water_events", String(body));
+  if (code == 201 || code == 200)
+  {
+    Serial.println("[Supabase] Water event pushed OK");
+  }
+  else
+  {
+    Serial.print("[Supabase] Water event push failed, HTTP code: ");
+    Serial.println(code);
+  }
+}
+
+// ==================== Supabase Poll: Pending Commands ====================
+// Execute a command string received from Supabase (same logic as web handlers)
+void executeCloudCommand(const String &action)
+{
+  Serial.print("[Supabase] Executing cloud command: ");
+  Serial.println(action);
+
+  if (action == "motor_on" || action == "on")
+  {
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+    motorRunning  = true;
+    motorManualMode = true;
+    motorStartTime  = millis();
+  }
+  else if (action == "motor_off" || action == "off")
+  {
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, LOW);
+    motorRunning  = false;
+    motorManualMode = false;
+  }
+  else if (action == "motor_reset" || action == "reset")
+  {
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, LOW);
+    motorRunning  = false;
+    motorTriggered  = false;
+    motorManualMode = false;
+  }
+  else if (action == "pump_auto" || action == "Auto")
+  {
+    pumpMode = "Auto";
+  }
+  else if (action == "pump_on" || action == "ManualOn")
+  {
+    pumpMode = "ManualOn";
+  }
+  else if (action == "pump_off" || action == "ManualOff")
+  {
+    pumpMode = "ManualOff";
+  }
+  else if (action == "fan_on")
+  {
+    fanMode = "ManualOn";
+    digitalWrite(FAN1_RELAY, LOW);
+    digitalWrite(FAN2_RELAY, LOW);
+    digitalWrite(FAN3_RELAY, LOW);
+    fansActive = true;
+  }
+  else if (action == "fan_off")
+  {
+    fanMode = "ManualOff";
+    digitalWrite(FAN1_RELAY, HIGH);
+    digitalWrite(FAN2_RELAY, HIGH);
+    digitalWrite(FAN3_RELAY, HIGH);
+    fansActive = false;
+  }
+  else if (action == "fan_auto")
+  {
+    fanMode = "Auto";
+  }
+  else if (action == "mister_spray" || action == "spray")
+  {
+    misterMode = "ManualOn";
+    digitalWrite(WATER_MISTER_RELAY, LOW);
+    misterSprayInProgress = true;
+    misterSprayStartTime  = millis();
+  }
+  else if (action == "mister_off")
+  {
+    misterMode = "ManualOff";
+    digitalWrite(WATER_MISTER_RELAY, HIGH);
+    misterSprayInProgress = false;
+  }
+  else if (action == "mister_auto")
+  {
+    misterMode = "Auto";
+  }
+  else
+  {
+    Serial.print("[Supabase] Unknown command ignored: ");
+    Serial.println(action);
+  }
+}
+
+void supabasePollCommands()
+{
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  // GET the oldest pending command
+  String body = supabaseGet(
+    "/rest/v1/commands?status=eq.pending&order=recorded_at.asc&limit=1"
+  );
+
+  if (body.isEmpty() || body == "[]") return;
+
+  // Parse the JSON array
+  StaticJsonDocument<512> doc;
+  DeserializationError err = deserializeJson(doc, body);
+  if (err || !doc.is<JsonArray>() || doc.as<JsonArray>().size() == 0) return;
+
+  JsonObject cmd    = doc[0].as<JsonObject>();
+  String     id     = cmd["id"].as<String>();
+  String     action = cmd["action"].as<String>();
+
+  if (id.isEmpty() || action.isEmpty()) return;
+
+  // Execute the command on hardware
+  executeCloudCommand(action);
+
+  // Mark command as 'executed' in Supabase
+  String patchPath = "/rest/v1/commands?id=eq." + id;
+  supabasePatch(patchPath.c_str(), "{\"status\":\"executed\"}");
+  Serial.print("[Supabase] Command marked executed: ");
+  Serial.println(id);
 }
 
 void handleRoot()
@@ -1607,5 +1872,24 @@ void loop()
   }
 
   server.handleClient();
+
+  // ----- Supabase: Push sensor readings every 30s (only when WiFi STA connected) -----
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    unsigned long now = millis();
+    if (now - lastSupabasePushTime >= SUPABASE_PUSH_INTERVAL)
+    {
+      lastSupabasePushTime = now;
+      supabasePushSensorData();
+    }
+
+    // ----- Supabase: Poll for pending commands every 5s -----
+    if (now - lastCommandPollTime >= COMMAND_POLL_INTERVAL)
+    {
+      lastCommandPollTime = now;
+      supabasePollCommands();
+    }
+  }
+
   delay(50);
 }
