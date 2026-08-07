@@ -8,9 +8,14 @@
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet" />
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+    <script src="./firebase-config.js"></script>
     <style>
         :root {
             --bg-base: #04100c;
@@ -164,18 +169,43 @@
         }
 
         @keyframes pulse-green {
-            0%, 100% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.35); opacity: 0.6; }
+
+            0%,
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+
+            50% {
+                transform: scale(1.35);
+                opacity: 0.6;
+            }
         }
 
         @keyframes pulse-red {
-            0%, 100% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.35); opacity: 0.5; }
+
+            0%,
+            100% {
+                transform: scale(1);
+                opacity: 1;
+            }
+
+            50% {
+                transform: scale(1.35);
+                opacity: 0.5;
+            }
         }
 
         @keyframes pulse-amber {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.4;
+            }
         }
 
         .meta-chip {
@@ -639,8 +669,15 @@
         }
 
         @keyframes slideIn {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
         }
     </style>
 </head>
@@ -671,10 +708,13 @@
 
         <!-- Direct Target Settings Box -->
         <div id="settingsCard" class="settings-card">
-            <h3 style="font-size: 0.95rem; font-weight: 700; margin-bottom: 6px; color: var(--accent-blue);">🔗 Target ESP32 Device URL (Direct Local WiFi)</h3>
-            <p style="font-size: 0.8rem; color: var(--text-muted);">If your ESP32 is on the same WiFi network as your browser, enter its IP address or local hostname below for direct control.</p>
+            <h3 style="font-size: 0.95rem; font-weight: 700; margin-bottom: 6px; color: var(--accent-blue);">🔗 Target
+                ESP32 Device URL (Direct Local WiFi)</h3>
+            <p style="font-size: 0.8rem; color: var(--text-muted);">If your ESP32 is on the same WiFi network as your
+                browser, enter its IP address or local hostname below for direct control.</p>
             <div class="settings-row">
-                <input type="text" id="targetIpInput" class="input-text" placeholder="e.g. http://192.168.1.105 or http://microgreen.local" />
+                <input type="text" id="targetIpInput" class="input-text"
+                    placeholder="e.g. http://192.168.1.105 or http://microgreen.local" />
                 <button class="btn btn-success" onclick="saveTargetUrl()">Save & Connect</button>
                 <button class="btn btn-neutral" onclick="clearTargetUrl()">Use Netlify Proxy</button>
             </div>
@@ -687,15 +727,18 @@
                     <span class="alert-icon">⚠️</span>
                     <div>
                         <strong>Hardware Connection & Cloud Storage Status:</strong>
-                        <span id="alertReason">ESP32 target endpoint is offline. Live sensor data is NOT being saved to Supabase.</span>
+                        <span id="alertReason">ESP32 target endpoint is offline. Live sensor data is NOT being saved to
+                            Supabase.</span>
                     </div>
                 </div>
                 <button class="btn-action" onclick="updateStatus()">Re-test Link</button>
             </div>
             <div class="alert-help-box">
                 💡 <strong>Connection Options:</strong><br />
-                1. <strong>Local Mode (SPIFFS / Local WiFi):</strong> Click <strong>⚙️ Target</strong> above and enter your ESP32 IP address (e.g. <code>http://192.168.1.xxx</code>) for live controls.<br />
-                2. <strong>Cloud Sync Mode:</strong> Set <code>ESP32_CONTROL_URL</code> in Netlify Environment Variables to your public ngrok / Tailscale / DDNS address to enable automated Supabase storage.
+                1. <strong>Local Mode (SPIFFS / Local WiFi):</strong> Click <strong>⚙️ Target</strong> above and enter
+                your ESP32 IP address (e.g. <code>http://192.168.1.xxx</code>) for live controls.<br />
+                2. <strong>Cloud Sync Mode:</strong> Set <code>ESP32_CONTROL_URL</code> in Netlify Environment Variables
+                to your public ngrok / Tailscale / DDNS address to enable automated Supabase storage.
             </div>
         </div>
 
@@ -711,9 +754,11 @@
                     <span id="height" class="stat-value">--</span>
                     <span class="stat-unit">cm</span>
                 </div>
-                <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted);">
+                <div
+                    style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted);">
                     <span>Target: 10.0 cm</span>
-                    <span>Days Active: <strong id="daysActive" style="color: var(--text-main); font-family: var(--font-mono);">--</strong></span>
+                    <span>Days Active: <strong id="daysActive"
+                            style="color: var(--text-main); font-family: var(--font-mono);">--</strong></span>
                 </div>
                 <div class="progress-bar-wrap">
                     <div id="heightProgress" class="progress-bar-fill"></div>
@@ -814,7 +859,9 @@
                     <span class="card-title"><span class="card-icon">🌀</span> Climate Auxiliaries</span>
                 </div>
                 <div style="margin-bottom: 12px;">
-                    <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 6px;">Circulation Fans</div>
+                    <div
+                        style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 6px;">
+                        Circulation Fans</div>
                     <div class="control-btns">
                         <button class="btn btn-success" onclick="controlAux('fan', 'ManualOn')">Fans ON</button>
                         <button class="btn btn-danger" onclick="controlAux('fan', 'ManualOff')">Fans OFF</button>
@@ -822,9 +869,12 @@
                     </div>
                 </div>
                 <div>
-                    <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 6px;">Water Mister Spray</div>
+                    <div
+                        style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 6px;">
+                        Water Mister Spray</div>
                     <div class="control-btns">
-                        <button class="btn btn-success" onclick="controlAux('mister', 'spray', 'spray')">Spray 5s</button>
+                        <button class="btn btn-success" onclick="controlAux('mister', 'spray', 'spray')">Spray
+                            5s</button>
                         <button class="btn btn-danger" onclick="controlAux('mister', 'ManualOff')">Stop</button>
                         <button class="btn btn-neutral" onclick="controlAux('mister', 'Auto')">Auto Mode</button>
                     </div>
@@ -909,6 +959,22 @@
         let heightChart = null;
         let waterChart = null;
         let lastFetchTime = 0;
+
+        const firebaseApp = firebase.apps.length ? firebase.apps[0] : firebase.initializeApp(window.firebaseConfig);
+        const firebaseDb = firebase.database(firebaseApp);
+
+        async function readFirebaseLatest() {
+            try {
+                const snapshot = await firebaseDb.ref('sensorReadings').orderByKey().limitToLast(1).once('value');
+                const value = snapshot.val();
+                if (!value) return null;
+                const key = Object.keys(value)[0];
+                return value[key];
+            } catch (e) {
+                console.error('Firebase read failed:', e);
+                return null;
+            }
+        }
 
         function getSavedTargetUrl() {
             return localStorage.getItem('esp32_target_url') || '';
@@ -1217,7 +1283,7 @@
             try {
                 const customTarget = getSavedTargetUrl();
                 const isLocalHost = window.location.hostname.includes('192.168.') || window.location.hostname.includes('local');
-                
+
                 // Determine chart endpoint: Netlify history API (Supabase) vs Local SPIFFS
                 let heightUrl = '/.netlify/functions/history?type=height';
                 let waterUrl = '/.netlify/functions/history?type=water';
