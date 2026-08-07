@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Smart Microgreen Tray - Hosted IoT Dashboard</title>
+    <title>Smart Microgreen Tray - Dual Mode IoT Dashboard</title>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -61,7 +61,7 @@
             align-items: center;
             justify-content: space-between;
             gap: 16px;
-            margin-bottom: 24px;
+            margin-bottom: 20px;
             padding: 18px 24px;
             background: var(--card-bg);
             backdrop-filter: blur(12px);
@@ -164,43 +164,18 @@
         }
 
         @keyframes pulse-green {
-
-            0%,
-            100% {
-                transform: scale(1);
-                opacity: 1;
-            }
-
-            50% {
-                transform: scale(1.35);
-                opacity: 0.6;
-            }
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.35); opacity: 0.6; }
         }
 
         @keyframes pulse-red {
-
-            0%,
-            100% {
-                transform: scale(1);
-                opacity: 1;
-            }
-
-            50% {
-                transform: scale(1.35);
-                opacity: 0.5;
-            }
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.35); opacity: 0.5; }
         }
 
         @keyframes pulse-amber {
-
-            0%,
-            100% {
-                opacity: 1;
-            }
-
-            50% {
-                opacity: 0.4;
-            }
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
         }
 
         .meta-chip {
@@ -214,7 +189,7 @@
             border: 1px solid rgba(255, 255, 255, 0.05);
         }
 
-        .btn-refresh {
+        .btn-action {
             padding: 8px 14px;
             border-radius: 20px;
             border: 1px solid rgba(0, 230, 118, 0.25);
@@ -224,9 +199,12 @@
             font-weight: 700;
             cursor: pointer;
             transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
         }
 
-        .btn-refresh:hover {
+        .btn-action:hover {
             background: rgba(0, 230, 118, 0.2);
             transform: translateY(-1px);
         }
@@ -235,20 +213,27 @@
         .alert-banner {
             display: none;
             margin-bottom: 20px;
-            padding: 14px 20px;
-            border-radius: 12px;
+            padding: 16px 20px;
+            border-radius: 14px;
             background: rgba(255, 61, 113, 0.1);
-            border: 1px solid rgba(255, 61, 113, 0.3);
+            border: 1px solid rgba(255, 61, 113, 0.35);
             color: #ff94b2;
             font-size: 0.88rem;
-            line-height: 1.4;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
+            line-height: 1.5;
+            flex-direction: column;
+            gap: 10px;
         }
 
         .alert-banner.show {
             display: flex;
+        }
+
+        .alert-header-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            width: 100%;
         }
 
         .alert-content {
@@ -258,7 +243,55 @@
         }
 
         .alert-icon {
-            font-size: 1.2rem;
+            font-size: 1.3rem;
+        }
+
+        .alert-help-box {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 0.82rem;
+            color: var(--text-main);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        /* Settings Drawer */
+        .settings-card {
+            display: none;
+            margin-bottom: 20px;
+            padding: 18px 22px;
+            background: var(--card-bg);
+            border: 1px solid var(--accent-blue);
+            border-radius: 14px;
+            box-shadow: var(--shadow-card);
+        }
+
+        .settings-card.show {
+            display: block;
+        }
+
+        .settings-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        .input-text {
+            flex: 1;
+            min-width: 240px;
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            background: rgba(0, 0, 0, 0.4);
+            color: var(--text-main);
+            font-family: var(--font-mono);
+            font-size: 0.88rem;
+        }
+
+        .input-text:focus {
+            outline: none;
+            border-color: var(--accent-green);
         }
 
         /* Layout Grid */
@@ -579,7 +612,7 @@
             color: var(--text-main);
         }
 
-        /* Notification Toast */
+        /* Toast Container */
         .toast-container {
             position: fixed;
             bottom: 24px;
@@ -606,15 +639,8 @@
         }
 
         @keyframes slideIn {
-            from {
-                transform: translateX(100%);
-                opacity: 0;
-            }
-
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
         }
     </style>
 </head>
@@ -627,7 +653,7 @@
                 <span class="brand-icon">🌱</span>
                 <div class="brand-title">
                     <h1>Microgreen Intelligence</h1>
-                    <p>Smart Tray Telemetry & Actuation Control</p>
+                    <p>Dual-Mode Telemetry & Actuation Control</p>
                 </div>
             </div>
 
@@ -638,20 +664,39 @@
                 </div>
                 <div id="pingChip" class="meta-chip">Ping: -- ms</div>
                 <div id="lastSyncChip" class="meta-chip">Updated: --</div>
-                <button class="btn-refresh" onclick="updateStatus()">🔄 Refresh</button>
+                <button class="btn-action" onclick="toggleSettings()">⚙️ Target</button>
+                <button class="btn-action" onclick="updateStatus()">🔄 Refresh</button>
             </div>
         </header>
 
-        <!-- Unreachable Warning Banner -->
-        <div id="alertBanner" class="alert-banner">
-            <div class="alert-content">
-                <span class="alert-icon">⚠️</span>
-                <div>
-                    <strong>ESP32 Hardware Unreachable:</strong>
-                    <span id="alertReason">Target ESP32 endpoint timed out or is offline. Showing cloud state.</span>
-                </div>
+        <!-- Direct Target Settings Box -->
+        <div id="settingsCard" class="settings-card">
+            <h3 style="font-size: 0.95rem; font-weight: 700; margin-bottom: 6px; color: var(--accent-blue);">🔗 Target ESP32 Device URL (Direct Local WiFi)</h3>
+            <p style="font-size: 0.8rem; color: var(--text-muted);">If your ESP32 is on the same WiFi network as your browser, enter its IP address or local hostname below for direct control.</p>
+            <div class="settings-row">
+                <input type="text" id="targetIpInput" class="input-text" placeholder="e.g. http://192.168.1.105 or http://microgreen.local" />
+                <button class="btn btn-success" onclick="saveTargetUrl()">Save & Connect</button>
+                <button class="btn btn-neutral" onclick="clearTargetUrl()">Use Netlify Proxy</button>
             </div>
-            <button class="btn-refresh" onclick="updateStatus()">Re-test Link</button>
+        </div>
+
+        <!-- Diagnostic Warning Banner -->
+        <div id="alertBanner" class="alert-banner">
+            <div class="alert-header-row">
+                <div class="alert-content">
+                    <span class="alert-icon">⚠️</span>
+                    <div>
+                        <strong>Hardware Connection & Cloud Storage Status:</strong>
+                        <span id="alertReason">ESP32 target endpoint is offline. Live sensor data is NOT being saved to Supabase.</span>
+                    </div>
+                </div>
+                <button class="btn-action" onclick="updateStatus()">Re-test Link</button>
+            </div>
+            <div class="alert-help-box">
+                💡 <strong>Connection Options:</strong><br />
+                1. <strong>Local Mode (SPIFFS / Local WiFi):</strong> Click <strong>⚙️ Target</strong> above and enter your ESP32 IP address (e.g. <code>http://192.168.1.xxx</code>) for live controls.<br />
+                2. <strong>Cloud Sync Mode:</strong> Set <code>ESP32_CONTROL_URL</code> in Netlify Environment Variables to your public ngrok / Tailscale / DDNS address to enable automated Supabase storage.
+            </div>
         </div>
 
         <!-- Telemetry Cards Grid -->
@@ -824,12 +869,12 @@
                         <span id="diagReachable" class="diag-val">Checking...</span>
                     </div>
                     <div class="diag-row">
-                        <span class="diag-label">Device Local IP</span>
-                        <span id="diagIp" class="diag-val">--</span>
+                        <span class="diag-label">Cloud DB Storage</span>
+                        <span id="diagDbSync" class="diag-val">--</span>
                     </div>
                     <div class="diag-row">
-                        <span class="diag-label">WiFi Mode</span>
-                        <span id="diagWifiMode" class="diag-val">--</span>
+                        <span class="diag-label">Device Local IP</span>
+                        <span id="diagIp" class="diag-val">--</span>
                     </div>
                 </div>
             </div>
@@ -865,6 +910,41 @@
         let waterChart = null;
         let lastFetchTime = 0;
 
+        function getSavedTargetUrl() {
+            return localStorage.getItem('esp32_target_url') || '';
+        }
+
+        function toggleSettings() {
+            const card = document.getElementById('settingsCard');
+            card.classList.toggle('show');
+            if (card.classList.contains('show')) {
+                document.getElementById('targetIpInput').value = getSavedTargetUrl();
+            }
+        }
+
+        function saveTargetUrl() {
+            let val = document.getElementById('targetIpInput').value.trim();
+            if (val && !val.startsWith('http://') && !val.startsWith('https://')) {
+                val = 'http://' + val;
+            }
+            if (val) {
+                localStorage.setItem('esp32_target_url', val);
+                showToast(`Target URL saved: ${val}`, 'success');
+            } else {
+                localStorage.removeItem('esp32_target_url');
+            }
+            document.getElementById('settingsCard').classList.remove('show');
+            updateStatus();
+        }
+
+        function clearTargetUrl() {
+            localStorage.removeItem('esp32_target_url');
+            document.getElementById('targetIpInput').value = '';
+            document.getElementById('settingsCard').classList.remove('show');
+            showToast('Cleared custom target. Using Netlify Proxy.', 'info');
+            updateStatus();
+        }
+
         function showToast(message, type = 'info') {
             const container = document.getElementById('toastContainer');
             const toast = document.createElement('div');
@@ -880,6 +960,23 @@
             }, 3500);
         }
 
+        async function fetchWithTimeout(resource, options = {}) {
+            const { timeout = 3000 } = options;
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), timeout);
+            try {
+                const response = await fetch(resource, {
+                    ...options,
+                    signal: controller.signal
+                });
+                clearTimeout(id);
+                return response;
+            } catch (err) {
+                clearTimeout(id);
+                throw err;
+            }
+        }
+
         async function updateStatus() {
             const startTime = Date.now();
             const connPill = document.getElementById('connPill');
@@ -890,128 +987,186 @@
             const alertBanner = document.getElementById('alertBanner');
             const alertReason = document.getElementById('alertReason');
 
-            try {
-                // Determine endpoint: Netlify Function or direct ESP32 /status
-                const isLocalEsp = window.location.pathname === '/' && !window.location.hostname.includes('netlify');
-                const targetEndpoint = isLocalEsp ? '/status' : '/.netlify/functions/motor-control';
+            const customTarget = getSavedTargetUrl();
+            let data = null;
+            let pingMs = 0;
+            let connectionType = 'cloud'; // 'direct' or 'cloud'
 
-                document.getElementById('diagHosting').textContent = isLocalEsp ? 'Direct ESP32' : 'Netlify Proxy';
-
-                const response = await fetch(targetEndpoint, { cache: 'no-cache' });
-                const pingMs = Date.now() - startTime;
-                pingChip.textContent = `Ping: ${pingMs} ms`;
-
-                if (!response.ok) {
-                    throw new Error(`HTTP Error ${response.status}`);
+            // Attempt 1: Direct Local Connection if custom target or local host
+            if (customTarget || window.location.hostname.includes('192.168.') || window.location.hostname.includes('local')) {
+                const directUrl = customTarget ? `${customTarget.replace(/\/$/, '')}/status` : '/status';
+                try {
+                    const res = await fetchWithTimeout(directUrl, { timeout: 2500, cache: 'no-cache' });
+                    if (res.ok) {
+                        data = await res.json();
+                        pingMs = Date.now() - startTime;
+                        connectionType = 'direct';
+                    }
+                } catch (e) {
+                    console.log('Direct local connect failed, falling back to Netlify proxy:', e);
                 }
+            }
 
-                const data = await response.json();
-                lastFetchTime = Date.now();
-                lastSyncChip.textContent = 'Updated: just now';
-
-                // Determine ESP32 Reachability & Connection Status
-                const isOnline = data.connectionStatus === 'online' || data.wifiConnected === true || data.wifiConnected === 'true' || isLocalEsp;
-
-                if (isOnline) {
-                    connPill.className = 'conn-pill online';
-                    pulseDot.className = 'pulse-dot online';
-                    connText.textContent = 'ONLINE (ESP32 Ready)';
-                    alertBanner.classList.remove('show');
-                    document.getElementById('diagReachable').textContent = 'YES (Connected)';
-                    document.getElementById('diagReachable').style.color = 'var(--accent-green)';
-                } else {
-                    connPill.className = 'conn-pill offline';
-                    pulseDot.className = 'pulse-dot offline';
-                    connText.textContent = 'OFFLINE (Cloud Standby)';
-                    alertBanner.classList.add('show');
-                    alertReason.textContent = data.health?.reason || 'Target ESP32 is offline or unreachable via cloud gateway.';
-                    document.getElementById('diagReachable').textContent = 'NO (Unreachable)';
-                    document.getElementById('diagReachable').style.color = 'var(--danger)';
+            // Attempt 2: Netlify Cloud Proxy
+            if (!data) {
+                try {
+                    const res = await fetchWithTimeout('/.netlify/functions/motor-control', { timeout: 4500, cache: 'no-cache' });
+                    pingMs = Date.now() - startTime;
+                    if (res.ok) {
+                        data = await res.json();
+                        connectionType = 'cloud';
+                    }
+                } catch (e) {
+                    console.error('Netlify function fetch error:', e);
                 }
+            }
 
-                // Telemetry: Plant Height
-                const heightVal = Number.isFinite(data.distance) && data.distance > 0 ? data.distance : 0;
-                document.getElementById('height').textContent = heightVal > 0 ? heightVal.toFixed(1) : '--';
-                const progressPct = Math.min(100, Math.max(0, (heightVal / 10.0) * 100));
-                document.getElementById('heightProgress').style.width = `${progressPct}%`;
-                document.getElementById('daysActive').textContent = data.daysSinceGermination ?? '--';
-
-                // Growth Stage Badge
-                const stageName = (data.growthStage || 'unknown').toString();
-                const badge = document.getElementById('stageBadge');
-                badge.className = 'stage-badge stage-' + stageName.toLowerCase();
-                badge.textContent = stageName;
-
-                // Soil Moisture
-                const soilVal = data.soilValue ?? 0;
-                document.getElementById('soilValue').textContent = data.soilValue ?? '--';
-                const isWet = soilVal > 2000;
-                const soilBadge = document.getElementById('soilStatusBadge');
-                soilBadge.className = 'stage-badge ' + (isWet ? 'stage-germination' : 'stage-harvest');
-                soilBadge.textContent = isWet ? 'Moist' : 'Dry';
-                document.getElementById('soilState').textContent = isWet ? 'Wet (Optimal)' : 'Dry (Watering Needed)';
-
-                // Flow Rate
-                const flowVal = Number.parseFloat(data.flowValue ?? 0);
-                document.getElementById('flowValue').textContent = flowVal.toFixed(1);
-                const isSafeFlow = flowVal <= 900;
-                const flowBadge = document.getElementById('flowSafetyBadge');
-                flowBadge.className = 'stage-badge ' + (isSafeFlow ? 'stage-germination' : 'stage-harvest');
-                flowBadge.textContent = isSafeFlow ? 'Normal Flow' : '⚠️ High Flow';
-                document.getElementById('flowStatus').textContent = isSafeFlow ? '✓ Safe' : '⚠️ Warning';
-
-                // Environmental Metrics
-                document.getElementById('tempVal').textContent = data.temperature ? `${data.temperature} °C` : '-- °C';
-                document.getElementById('humVal').textContent = data.humidity ? `${data.humidity} %` : '-- %';
-                const floatOk = data.floatSwitch === true || data.floatSwitch === 'true';
-                const floatBadge = document.getElementById('floatSwitchBadge');
-                floatBadge.className = 'stage-badge ' + (floatOk ? 'stage-germination' : 'stage-harvest');
-                floatBadge.textContent = floatOk ? 'Float: Normal' : 'Float: Low Water';
-
-                // Pump Control & Mode
-                const currentMode = data.pumpMode || 'Auto';
-                const currentState = data.pumpState || 'OFF';
-                document.getElementById('pumpMode').textContent = currentMode;
-                document.getElementById('pumpState').textContent = currentState;
-                const pumpPill = document.getElementById('pumpStatePill');
-                pumpPill.className = 'stage-badge ' + (currentState === 'ON' ? 'stage-germination' : 'stage-unknown');
-                pumpPill.textContent = `PUMP ${currentState}`;
-                updateModeButtons(currentMode);
-
-                // Motor Status
-                const motorSt = data.motorStatus || 'OFF';
-                document.getElementById('motorStatus').textContent = motorSt;
-                const motorBadge = document.getElementById('motorStatusBadge');
-                motorBadge.className = 'stage-badge ' + (motorSt === 'ON' ? 'stage-germination' : 'stage-unknown');
-                motorBadge.textContent = motorSt;
-
-                // Diagnostics
-                document.getElementById('diagIp').textContent = data.deviceIp || '192.168.1.xxx';
-                document.getElementById('diagWifiMode').textContent = data.wifiMode || 'STA Mode';
-
-            } catch (e) {
-                console.error('Status fetch error:', e);
+            if (!data) {
                 connPill.className = 'conn-pill offline';
                 pulseDot.className = 'pulse-dot offline';
                 connText.textContent = 'DISCONNECTED';
                 pingChip.textContent = 'Ping: Fail';
                 alertBanner.classList.add('show');
-                alertReason.textContent = 'Network error fetching telemetry from gateway.';
+                alertReason.textContent = 'Unable to reach Netlify Gateway or Local ESP32 Server.';
+                document.getElementById('diagHosting').textContent = 'Disconnected';
                 document.getElementById('diagReachable').textContent = 'NO (Offline)';
                 document.getElementById('diagReachable').style.color = 'var(--danger)';
+                document.getElementById('diagDbSync').textContent = 'OFFLINE (No Sync)';
+                return;
             }
+
+            lastFetchTime = Date.now();
+            pingChip.textContent = `Ping: ${pingMs} ms`;
+            lastSyncChip.textContent = 'Updated: just now';
+
+            const isHardwareOnline = connectionType === 'direct' || data.deviceReachable === true || data.connectionStatus === 'online';
+            const isCloudSyncActive = connectionType === 'cloud' && data.cloudStorageActive === true;
+
+            if (connectionType === 'direct') {
+                connPill.className = 'conn-pill online';
+                pulseDot.className = 'pulse-dot online';
+                connText.textContent = 'ONLINE (Direct Local)';
+                alertBanner.classList.remove('show');
+                document.getElementById('diagHosting').textContent = 'Direct Local ESP32';
+                document.getElementById('diagReachable').textContent = 'YES (Local LAN)';
+                document.getElementById('diagReachable').style.color = 'var(--accent-green)';
+                document.getElementById('diagDbSync').textContent = 'DISABLED (Local Mode)';
+                document.getElementById('diagDbSync').style.color = 'var(--text-muted)';
+            } else if (isHardwareOnline) {
+                connPill.className = 'conn-pill online';
+                pulseDot.className = 'pulse-dot online';
+                connText.textContent = 'ONLINE (Cloud + Supabase)';
+                alertBanner.classList.remove('show');
+                document.getElementById('diagHosting').textContent = 'Netlify Cloud Proxy';
+                document.getElementById('diagReachable').textContent = 'YES (Connected)';
+                document.getElementById('diagReachable').style.color = 'var(--accent-green)';
+                document.getElementById('diagDbSync').textContent = isCloudSyncActive ? 'ACTIVE (Saving Data)' : 'STANDBY';
+                document.getElementById('diagDbSync').style.color = isCloudSyncActive ? 'var(--accent-green)' : 'var(--accent-amber)';
+            } else {
+                connPill.className = 'conn-pill connecting';
+                pulseDot.className = 'pulse-dot connecting';
+                connText.textContent = 'CLOUD ONLY (No Device)';
+                alertBanner.classList.add('show');
+                alertReason.textContent = data.health?.reason || 'ESP32 device is offline. Live sensor data is NOT being saved to Supabase.';
+                document.getElementById('diagHosting').textContent = 'Netlify Gateway (Offline)';
+                document.getElementById('diagReachable').textContent = 'NO (Unreachable)';
+                document.getElementById('diagReachable').style.color = 'var(--danger)';
+                document.getElementById('diagDbSync').textContent = 'PAUSED (Hardware Offline)';
+                document.getElementById('diagDbSync').style.color = 'var(--danger)';
+            }
+
+            // Telemetry: Plant Height
+            const heightVal = Number.isFinite(data.distance) && data.distance > 0 ? data.distance : 0;
+            document.getElementById('height').textContent = heightVal > 0 ? heightVal.toFixed(1) : '--';
+            const progressPct = Math.min(100, Math.max(0, (heightVal / 10.0) * 100));
+            document.getElementById('heightProgress').style.width = `${progressPct}%`;
+            document.getElementById('daysActive').textContent = data.daysSinceGermination ?? '--';
+
+            // Growth Stage Badge
+            const stageName = (data.growthStage || 'unknown').toString();
+            const badge = document.getElementById('stageBadge');
+            badge.className = 'stage-badge stage-' + stageName.toLowerCase();
+            badge.textContent = stageName;
+
+            // Soil Moisture
+            const soilVal = data.soilValue ?? 0;
+            document.getElementById('soilValue').textContent = data.soilValue ?? '--';
+            const isWet = soilVal > 2000;
+            const soilBadge = document.getElementById('soilStatusBadge');
+            soilBadge.className = 'stage-badge ' + (isWet ? 'stage-germination' : 'stage-harvest');
+            soilBadge.textContent = isWet ? 'Moist' : 'Dry';
+            document.getElementById('soilState').textContent = isWet ? 'Wet (Optimal)' : 'Dry (Watering Needed)';
+
+            // Flow Rate
+            const flowVal = Number.parseFloat(data.flowValue ?? 0);
+            document.getElementById('flowValue').textContent = flowVal.toFixed(1);
+            const isSafeFlow = flowVal <= 900;
+            const flowBadge = document.getElementById('flowSafetyBadge');
+            flowBadge.className = 'stage-badge ' + (isSafeFlow ? 'stage-germination' : 'stage-harvest');
+            flowBadge.textContent = isSafeFlow ? 'Normal Flow' : '⚠️ High Flow';
+            document.getElementById('flowStatus').textContent = isSafeFlow ? '✓ Safe' : '⚠️ Warning';
+
+            // Environmental Metrics
+            document.getElementById('tempVal').textContent = data.temperature ? `${data.temperature} °C` : '-- °C';
+            document.getElementById('humVal').textContent = data.humidity ? `${data.humidity} %` : '-- %';
+            const floatOk = data.floatSwitch === true || data.floatSwitch === 'true';
+            const floatBadge = document.getElementById('floatSwitchBadge');
+            floatBadge.className = 'stage-badge ' + (floatOk ? 'stage-germination' : 'stage-harvest');
+            floatBadge.textContent = floatOk ? 'Float: Normal' : 'Float: Low Water';
+
+            // Pump Control & Mode
+            const currentMode = data.pumpMode || 'Auto';
+            const currentState = data.pumpState || 'OFF';
+            document.getElementById('pumpMode').textContent = currentMode;
+            document.getElementById('pumpState').textContent = currentState;
+            const pumpPill = document.getElementById('pumpStatePill');
+            pumpPill.className = 'stage-badge ' + (currentState === 'ON' ? 'stage-germination' : 'stage-unknown');
+            pumpPill.textContent = `PUMP ${currentState}`;
+            updateModeButtons(currentMode);
+
+            // Motor Status
+            const motorSt = data.motorStatus || 'OFF';
+            document.getElementById('motorStatus').textContent = motorSt;
+            const motorBadge = document.getElementById('motorStatusBadge');
+            motorBadge.className = 'stage-badge ' + (motorSt === 'ON' ? 'stage-germination' : 'stage-unknown');
+            motorBadge.textContent = motorSt;
+
+            // Diagnostics
+            document.getElementById('diagIp').textContent = data.deviceIp || '192.168.1.xxx';
+        }
+
+        async function sendCommand(url, body) {
+            const customTarget = getSavedTargetUrl();
+            if (customTarget) {
+                try {
+                    const endpoint = `${customTarget.replace(/\/$/, '')}/control`;
+                    const res = await fetchWithTimeout(endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                        timeout: 3000
+                    });
+                    if (res.ok) return res;
+                } catch (e) {
+                    console.log('Direct command failed, trying cloud proxy');
+                }
+            }
+
+            return fetch('/.netlify/functions/motor-control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
         }
 
         async function setMode(mode) {
             try {
                 showToast(`Setting Pump Mode to ${mode}...`);
-                const response = await fetch('/.netlify/functions/motor-control', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mode })
-                });
-
-                if (!response.ok) throw new Error('Failed to send mode command');
+                const response = await sendCommand('/.netlify/functions/motor-control', { mode });
+                const result = await response.json();
+                if (!response.ok || result.ok === false) {
+                    throw new Error(result.reason || 'Failed to send mode command');
+                }
                 showToast(`Pump mode set to ${mode}`, 'success');
                 await updateStatus();
             } catch (e) {
@@ -1023,13 +1178,11 @@
             try {
                 document.getElementById('motorLastCmd').textContent = action.toUpperCase();
                 showToast(`Sending Motor Action: ${action.toUpperCase()}...`);
-                const response = await fetch('/.netlify/functions/motor-control', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action })
-                });
-
-                if (!response.ok) throw new Error('Failed to send motor command');
+                const response = await sendCommand('/.netlify/functions/motor-control', { action });
+                const result = await response.json();
+                if (!response.ok || result.ok === false) {
+                    throw new Error(result.reason || 'Failed to execute motor command');
+                }
                 showToast(`Motor command ${action.toUpperCase()} executed`, 'success');
                 await updateStatus();
             } catch (e) {
@@ -1040,13 +1193,11 @@
         async function controlAux(target, mode, action) {
             try {
                 showToast(`Sending ${target.toUpperCase()} command...`);
-                const response = await fetch('/.netlify/functions/motor-control', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ target, mode, action })
-                });
-
-                if (!response.ok) throw new Error(`Failed to send ${target} command`);
+                const response = await sendCommand('/.netlify/functions/motor-control', { target, mode, action });
+                const result = await response.json();
+                if (!response.ok || result.ok === false) {
+                    throw new Error(result.reason || `Failed to send ${target} command`);
+                }
                 showToast(`${target.toUpperCase()} updated successfully`, 'success');
                 await updateStatus();
             } catch (e) {
@@ -1064,7 +1215,20 @@
 
         async function loadCharts() {
             try {
-                const heightRes = await fetch('/heightHistory').catch(() => null);
+                const customTarget = getSavedTargetUrl();
+                const isLocalHost = window.location.hostname.includes('192.168.') || window.location.hostname.includes('local');
+                
+                // Determine chart endpoint: Netlify history API (Supabase) vs Local SPIFFS
+                let heightUrl = '/.netlify/functions/history?type=height';
+                let waterUrl = '/.netlify/functions/history?type=water';
+
+                if (customTarget || isLocalHost) {
+                    const base = customTarget ? customTarget.replace(/\/$/, '') : '';
+                    heightUrl = `${base}/heightHistory`;
+                    waterUrl = `${base}/waterEvents`;
+                }
+
+                const heightRes = await fetchWithTimeout(heightUrl, { timeout: 2500 }).catch(() => null);
                 const heightData = (heightRes && heightRes.ok) ? await heightRes.json() : [
                     { time: Date.now() / 1000 - 86400 * 3, height: 1.2 },
                     { time: Date.now() / 1000 - 86400 * 2, height: 2.4 },
@@ -1072,7 +1236,7 @@
                     { time: Date.now() / 1000, height: 4.8 }
                 ];
 
-                const waterRes = await fetch('/waterEvents').catch(() => null);
+                const waterRes = await fetchWithTimeout(waterUrl, { timeout: 2500 }).catch(() => null);
                 const waterData = (waterRes && waterRes.ok) ? await waterRes.json() : [
                     { time: Date.now() / 1000 - 3600 * 5 },
                     { time: Date.now() / 1000 - 3600 * 2 }
