@@ -716,7 +716,7 @@
                 <input type="text" id="targetIpInput" class="input-text"
                     placeholder="e.g. http://192.168.1.105 or http://microgreen.local" />
                 <button class="btn btn-success" onclick="saveTargetUrl()">Save & Connect</button>
-                <button class="btn btn-neutral" onclick="clearTargetUrl()">Use Netlify Proxy</button>
+                <button class="btn btn-neutral" onclick="clearTargetUrl()">Use Cloud (Firebase)</button>
             </div>
         </div>
 
@@ -728,17 +728,17 @@
                     <div>
                         <strong>Hardware Connection & Cloud Storage Status:</strong>
                         <span id="alertReason">ESP32 target endpoint is offline. Live sensor data is NOT being saved to
-                            Supabase.</span>
+                            Firebase.</span>
                     </div>
                 </div>
                 <button class="btn-action" onclick="updateStatus()">Re-test Link</button>
             </div>
             <div class="alert-help-box">
                 💡 <strong>Connection Options:</strong><br />
-                1. <strong>Local Mode (SPIFFS / Local WiFi):</strong> Click <strong>⚙️ Target</strong> above and enter
-                your ESP32 IP address (e.g. <code>http://192.168.1.xxx</code>) for live controls.<br />
-                2. <strong>Cloud Sync Mode:</strong> Set <code>ESP32_CONTROL_URL</code> in Netlify Environment Variables
-                to your public ngrok / Tailscale / DDNS address to enable automated Supabase storage.
+                1. <strong>Cloud Mode (default, works anywhere):</strong> The ESP32 pushes live data to Firebase and
+                reads commands from it. No setup here — just make sure the device is powered on and connected to WiFi.<br />
+                2. <strong>Local Mode (same WiFi only):</strong> Click <strong>⚙️ Target</strong> above and enter your
+                ESP32 IP address (e.g. <code>http://192.168.1.xxx</code>) to talk to the device directly, bypassing the cloud.
             </div>
         </div>
 
@@ -874,7 +874,7 @@
                         Water Mister Spray</div>
                     <div class="control-btns">
                         <button class="btn btn-success" onclick="controlAux('mister', 'spray', 'spray')">Spray
-                            5s</button>
+                            10s</button>
                         <button class="btn btn-danger" onclick="controlAux('mister', 'ManualOff')">Stop</button>
                         <button class="btn btn-neutral" onclick="controlAux('mister', 'Auto')">Auto Mode</button>
                     </div>
@@ -963,19 +963,6 @@
         const firebaseApp = firebase.apps.length ? firebase.apps[0] : firebase.initializeApp(window.firebaseConfig);
         const firebaseDb = firebase.database(firebaseApp);
 
-        async function readFirebaseLatest() {
-            try {
-                const snapshot = await firebaseDb.ref('sensorReadings').orderByKey().limitToLast(1).once('value');
-                const value = snapshot.val();
-                if (!value) return null;
-                const key = Object.keys(value)[0];
-                return value[key];
-            } catch (e) {
-                console.error('Firebase read failed:', e);
-                return null;
-            }
-        }
-
         function getSavedTargetUrl() {
             return localStorage.getItem('esp32_target_url') || '';
         }
@@ -1000,15 +987,15 @@
                 localStorage.removeItem('esp32_target_url');
             }
             document.getElementById('settingsCard').classList.remove('show');
-            updateStatus();
+            applyConnectionMode();
         }
 
         function clearTargetUrl() {
             localStorage.removeItem('esp32_target_url');
             document.getElementById('targetIpInput').value = '';
             document.getElementById('settingsCard').classList.remove('show');
-            showToast('Cleared custom target. Using Netlify Proxy.', 'info');
-            updateStatus();
+            showToast('Cleared target. Using cloud (Firebase).', 'info');
+            applyConnectionMode();
         }
 
         function showToast(message, type = 'info') {
@@ -1043,104 +1030,160 @@
             }
         }
 
-        async function updateStatus() {
-            const startTime = Date.now();
-            const connPill = document.getElementById('connPill');
-            const pulseDot = document.getElementById('pulseDot');
-            const connText = document.getElementById('connText');
-            const pingChip = document.getElementById('pingChip');
-            const lastSyncChip = document.getElementById('lastSyncChip');
+        // ---- Connection pill + diagnostics + alert banner ----
+        function renderConnection(o) {
+            const cls = o.state === 'online' ? 'online' : o.state === 'stale' ? 'connecting' : 'offline';
+            document.getElementById('connPill').className = 'conn-pill ' + cls;
+            document.getElementById('pulseDot').className = 'pulse-dot ' + cls;
+            document.getElementById('connText').textContent = o.label;
+            if (o.pingMs != null) document.getElementById('pingChip').textContent = `Ping: ${o.pingMs} ms`;
+            if (o.hosting != null) document.getElementById('diagHosting').textContent = o.hosting;
+            if (o.reachable != null) {
+                const el = document.getElementById('diagReachable');
+                el.textContent = o.reachable;
+                el.style.color = o.reachableColor || 'var(--text-muted)';
+            }
+            if (o.dbSync != null) {
+                const el = document.getElementById('diagDbSync');
+                el.textContent = o.dbSync;
+                el.style.color = o.dbSyncColor || 'var(--text-muted)';
+            }
             const alertBanner = document.getElementById('alertBanner');
-            const alertReason = document.getElementById('alertReason');
-
-            const customTarget = getSavedTargetUrl();
-            let data = null;
-            let pingMs = 0;
-            let connectionType = 'cloud'; // 'direct' or 'cloud'
-
-            // Attempt 1: Direct Local Connection if custom target or local host
-            if (customTarget || window.location.hostname.includes('192.168.') || window.location.hostname.includes('local')) {
-                const directUrl = customTarget ? `${customTarget.replace(/\/$/, '')}/status` : '/status';
-                try {
-                    const res = await fetchWithTimeout(directUrl, { timeout: 2500, cache: 'no-cache' });
-                    if (res.ok) {
-                        data = await res.json();
-                        pingMs = Date.now() - startTime;
-                        connectionType = 'direct';
-                    }
-                } catch (e) {
-                    console.log('Direct local connect failed, falling back to Netlify proxy:', e);
-                }
-            }
-
-            // Attempt 2: Netlify Cloud Proxy
-            if (!data) {
-                try {
-                    const res = await fetchWithTimeout('/.netlify/functions/motor-control', { timeout: 4500, cache: 'no-cache' });
-                    pingMs = Date.now() - startTime;
-                    if (res.ok) {
-                        data = await res.json();
-                        connectionType = 'cloud';
-                    }
-                } catch (e) {
-                    console.error('Netlify function fetch error:', e);
-                }
-            }
-
-            if (!data) {
-                connPill.className = 'conn-pill offline';
-                pulseDot.className = 'pulse-dot offline';
-                connText.textContent = 'DISCONNECTED';
-                pingChip.textContent = 'Ping: Fail';
-                alertBanner.classList.add('show');
-                alertReason.textContent = 'Unable to reach Netlify Gateway or Local ESP32 Server.';
-                document.getElementById('diagHosting').textContent = 'Disconnected';
-                document.getElementById('diagReachable').textContent = 'NO (Offline)';
-                document.getElementById('diagReachable').style.color = 'var(--danger)';
-                document.getElementById('diagDbSync').textContent = 'OFFLINE (No Sync)';
-                return;
-            }
-
-            lastFetchTime = Date.now();
-            pingChip.textContent = `Ping: ${pingMs} ms`;
-            lastSyncChip.textContent = 'Updated: just now';
-
-            const isHardwareOnline = connectionType === 'direct' || data.deviceReachable === true || data.connectionStatus === 'online';
-            const isCloudSyncActive = connectionType === 'cloud' && data.cloudStorageActive === true;
-
-            if (connectionType === 'direct') {
-                connPill.className = 'conn-pill online';
-                pulseDot.className = 'pulse-dot online';
-                connText.textContent = 'ONLINE (Direct Local)';
+            if (o.state === 'online') {
                 alertBanner.classList.remove('show');
-                document.getElementById('diagHosting').textContent = 'Direct Local ESP32';
-                document.getElementById('diagReachable').textContent = 'YES (Local LAN)';
-                document.getElementById('diagReachable').style.color = 'var(--accent-green)';
-                document.getElementById('diagDbSync').textContent = 'DISABLED (Local Mode)';
-                document.getElementById('diagDbSync').style.color = 'var(--text-muted)';
-            } else if (isHardwareOnline) {
-                connPill.className = 'conn-pill online';
-                pulseDot.className = 'pulse-dot online';
-                connText.textContent = 'ONLINE (Cloud + Supabase)';
-                alertBanner.classList.remove('show');
-                document.getElementById('diagHosting').textContent = 'Netlify Cloud Proxy';
-                document.getElementById('diagReachable').textContent = 'YES (Connected)';
-                document.getElementById('diagReachable').style.color = 'var(--accent-green)';
-                document.getElementById('diagDbSync').textContent = isCloudSyncActive ? 'ACTIVE (Saving Data)' : 'STANDBY';
-                document.getElementById('diagDbSync').style.color = isCloudSyncActive ? 'var(--accent-green)' : 'var(--accent-amber)';
             } else {
-                connPill.className = 'conn-pill connecting';
-                pulseDot.className = 'pulse-dot connecting';
-                connText.textContent = 'CLOUD ONLY (No Device)';
                 alertBanner.classList.add('show');
-                alertReason.textContent = data.health?.reason || 'ESP32 device is offline. Live sensor data is NOT being saved to Supabase.';
-                document.getElementById('diagHosting').textContent = 'Netlify Gateway (Offline)';
-                document.getElementById('diagReachable').textContent = 'NO (Unreachable)';
-                document.getElementById('diagReachable').style.color = 'var(--danger)';
-                document.getElementById('diagDbSync').textContent = 'PAUSED (Hardware Offline)';
-                document.getElementById('diagDbSync').style.color = 'var(--danger)';
+                if (o.reason) document.getElementById('alertReason').textContent = o.reason;
             }
+        }
 
+        // Remote path subscribes to /live over a websocket; LAN path polls the
+        // device's /status directly. Only one is active at a time, chosen by
+        // whether a ⚙️ Target URL is set.
+        let liveRef = null;
+        let lanPollTimer = null;
+        let lastLiveTs = 0;
+
+        function startLiveSubscription() {
+            if (liveRef) return;
+            liveRef = firebaseDb.ref('live');
+            liveRef.on('value', snap => {
+                const d = snap.val();
+                if (!d) {
+                    lastLiveTs = 0;
+                    renderConnection({
+                        state: 'offline', label: 'NO DEVICE DATA',
+                        hosting: 'Firebase (no /live node)', reachable: 'NO (No Data)',
+                        reachableColor: 'var(--danger)', dbSync: 'WAITING FOR DEVICE',
+                        dbSyncColor: 'var(--danger)',
+                        reason: 'No live data in Firebase yet. Power on the ESP32 and confirm it is connected to WiFi.'
+                    });
+                    return;
+                }
+                lastLiveTs = typeof d.ts === 'number' ? d.ts : 0;
+                lastFetchTime = Date.now();
+                renderTelemetry(d);
+                evaluateLiveFreshness();
+            }, err => {
+                console.error('Live subscription error:', err);
+                renderConnection({
+                    state: 'offline', label: 'FIREBASE ERROR',
+                    hosting: 'Firebase (unreachable)', reachable: 'NO (Error)',
+                    reachableColor: 'var(--danger)', dbSync: 'ERROR',
+                    dbSyncColor: 'var(--danger)',
+                    reason: 'Could not read /live from Firebase. Check firebase-config.js and your database rules.'
+                });
+            });
+        }
+
+        function stopLiveSubscription() {
+            if (liveRef) { liveRef.off(); liveRef = null; }
+        }
+
+        // The websocket can stay open after the device stops publishing, so
+        // derive freshness from the last timestamp rather than from the socket.
+        function evaluateLiveFreshness() {
+            if (getSavedTargetUrl()) return; // LAN mode owns the pill
+            if (!lastLiveTs) return;
+            const age = Date.now() - lastLiveTs;
+            if (age < 15000) {
+                renderConnection({
+                    state: 'online', label: 'ONLINE (Live)',
+                    hosting: 'Firebase Realtime DB', reachable: 'YES (Live)',
+                    reachableColor: 'var(--accent-green)', dbSync: 'ACTIVE (Streaming)',
+                    dbSyncColor: 'var(--accent-green)'
+                });
+            } else if (age < 120000) {
+                renderConnection({
+                    state: 'stale', label: `STALE (${Math.round(age / 1000)}s ago)`,
+                    hosting: 'Firebase Realtime DB', reachable: 'LAGGING',
+                    reachableColor: 'var(--accent-amber)', dbSync: 'STALE',
+                    dbSyncColor: 'var(--accent-amber)',
+                    reason: 'Live data is going stale — the ESP32 may have lost WiFi. Showing last known values.'
+                });
+            } else {
+                renderConnection({
+                    state: 'offline', label: 'DEVICE OFFLINE',
+                    hosting: 'Firebase Realtime DB', reachable: 'NO (Offline)',
+                    reachableColor: 'var(--danger)', dbSync: 'PAUSED (Device Offline)',
+                    dbSyncColor: 'var(--danger)',
+                    reason: 'No update from the ESP32 in over 2 minutes. Showing last known values.'
+                });
+            }
+        }
+
+        // LAN mode: talk to the device directly on the local network.
+        async function pollLan() {
+            const customTarget = getSavedTargetUrl();
+            if (!customTarget) return;
+            const startTime = Date.now();
+            const directUrl = `${customTarget.replace(/\/$/, '')}/status`;
+            try {
+                const res = await fetchWithTimeout(directUrl, { timeout: 2500, cache: 'no-cache' });
+                if (res.ok) {
+                    const data = await res.json();
+                    lastFetchTime = Date.now();
+                    renderTelemetry(data);
+                    renderConnection({
+                        state: 'online', label: 'ONLINE (Direct Local)',
+                        hosting: 'Direct Local ESP32', reachable: 'YES (Local LAN)',
+                        reachableColor: 'var(--accent-green)', dbSync: 'DISABLED (Local Mode)',
+                        dbSyncColor: 'var(--text-muted)', pingMs: Date.now() - startTime
+                    });
+                    return;
+                }
+            } catch (e) {
+                console.log('LAN poll failed:', e);
+            }
+            renderConnection({
+                state: 'offline', label: 'LAN UNREACHABLE',
+                hosting: 'Direct Local (Offline)', reachable: 'NO (Offline)',
+                reachableColor: 'var(--danger)', dbSync: 'N/A',
+                reason: `Cannot reach ${customTarget}. Check the IP and that this device is on the same WiFi, or clear the target to use the cloud.`
+            });
+        }
+
+        // Switch between cloud subscription and LAN polling based on the target box.
+        function applyConnectionMode() {
+            if (getSavedTargetUrl()) {
+                stopLiveSubscription();
+                if (!lanPollTimer) lanPollTimer = setInterval(pollLan, 3000);
+                pollLan();
+            } else {
+                if (lanPollTimer) { clearInterval(lanPollTimer); lanPollTimer = null; }
+                startLiveSubscription();
+            }
+            loadCharts();
+        }
+
+        // Manual refresh button. In cloud mode data arrives over the socket, so
+        // this just re-derives the freshness pill; in LAN mode it re-polls.
+        function updateStatus() {
+            if (getSavedTargetUrl()) pollLan();
+            else evaluateLiveFreshness();
+        }
+
+        function renderTelemetry(data) {
             // Telemetry: Plant Height
             const heightVal = Number.isFinite(data.distance) && data.distance > 0 ? data.distance : 0;
             document.getElementById('height').textContent = heightVal > 0 ? heightVal.toFixed(1) : '--';
@@ -1201,40 +1244,64 @@
             document.getElementById('diagIp').textContent = data.deviceIp || '192.168.1.xxx';
         }
 
-        async function sendCommand(url, body) {
+        // Map a UI intent to the single action string the ESP32 understands.
+        // Mirrors the mapping the old Netlify function did server-side; now the
+        // browser writes straight to /commands, which the device drains and
+        // DELETEs within ~5s.
+        function toCommandAction({ target, mode, action } = {}) {
+            if (target === 'fan') {
+                return mode === 'ManualOn' ? 'fan_on' : mode === 'ManualOff' ? 'fan_off' : 'fan_auto';
+            }
+            if (target === 'mister') {
+                return (action === 'spray' || mode === 'ManualOn') ? 'mister_spray'
+                    : mode === 'ManualOff' ? 'mister_off' : 'mister_auto';
+            }
+            if (mode && !action) {
+                return mode === 'ManualOn' ? 'pump_on' : mode === 'ManualOff' ? 'pump_off' : 'pump_auto';
+            }
+            if (action === 'on') return 'motor_on';
+            if (action === 'off') return 'motor_off';
+            if (action === 'reset') return 'motor_reset';
+            return action || mode || 'status';
+        }
+
+        // The same intent, expressed as a direct call to the device's own HTTP
+        // endpoints for LAN mode. These are GET-with-query so they work whether
+        // or not the browser can reach the internet.
+        function lanEndpoint(base, { target, mode, action } = {}) {
+            base = base.replace(/\/$/, '');
+            if (target === 'fan') return `${base}/fan?mode=${encodeURIComponent(mode || 'Auto')}`;
+            if (target === 'mister') {
+                return action === 'spray'
+                    ? `${base}/mister?action=spray`
+                    : `${base}/mister?action=mode&mode=${encodeURIComponent(mode || 'Auto')}`;
+            }
+            if (mode && !action) return `${base}/control?mode=${encodeURIComponent(mode)}`;
+            if (action) return `${base}/motor?action=${encodeURIComponent(action)}`;
+            return null;
+        }
+
+        async function sendCommand(body) {
             const customTarget = getSavedTargetUrl();
             if (customTarget) {
-                try {
-                    const endpoint = `${customTarget.replace(/\/$/, '')}/control`;
-                    const res = await fetchWithTimeout(endpoint, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(body),
-                        timeout: 3000
-                    });
-                    if (res.ok) return res;
-                } catch (e) {
-                    console.log('Direct command failed, trying cloud proxy');
+                const url = lanEndpoint(customTarget, body);
+                if (url) {
+                    const res = await fetchWithTimeout(url, { timeout: 3000 });
+                    if (!res.ok) throw new Error(`Device returned ${res.status}`);
+                    pollLan(); // reflect the change immediately
+                    return;
                 }
             }
-
-            return fetch('/.netlify/functions/motor-control', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
+            const action = toCommandAction(body);
+            await firebaseDb.ref('commands').push({ action, status: 'pending', ts: Date.now() });
         }
 
         async function setMode(mode) {
             try {
-                showToast(`Setting Pump Mode to ${mode}...`);
-                const response = await sendCommand('/.netlify/functions/motor-control', { mode });
-                const result = await response.json();
-                if (!response.ok || result.ok === false) {
-                    throw new Error(result.reason || 'Failed to send mode command');
-                }
-                showToast(`Pump mode set to ${mode}`, 'success');
-                await updateStatus();
+                showToast(`Setting pump mode to ${mode}...`);
+                await sendCommand({ mode });
+                updateModeButtons(mode);
+                showToast(`Pump command sent: ${mode}`, 'success');
             } catch (e) {
                 showToast(`Error updating mode: ${e.message}`, 'error');
             }
@@ -1243,14 +1310,9 @@
         async function motorAction(action) {
             try {
                 document.getElementById('motorLastCmd').textContent = action.toUpperCase();
-                showToast(`Sending Motor Action: ${action.toUpperCase()}...`);
-                const response = await sendCommand('/.netlify/functions/motor-control', { action });
-                const result = await response.json();
-                if (!response.ok || result.ok === false) {
-                    throw new Error(result.reason || 'Failed to execute motor command');
-                }
-                showToast(`Motor command ${action.toUpperCase()} executed`, 'success');
-                await updateStatus();
+                showToast(`Sending motor action: ${action.toUpperCase()}...`);
+                await sendCommand({ action });
+                showToast(`Motor command sent: ${action.toUpperCase()}`, 'success');
             } catch (e) {
                 showToast(`Motor action failed: ${e.message}`, 'error');
             }
@@ -1259,13 +1321,8 @@
         async function controlAux(target, mode, action) {
             try {
                 showToast(`Sending ${target.toUpperCase()} command...`);
-                const response = await sendCommand('/.netlify/functions/motor-control', { target, mode, action });
-                const result = await response.json();
-                if (!response.ok || result.ok === false) {
-                    throw new Error(result.reason || `Failed to send ${target} command`);
-                }
-                showToast(`${target.toUpperCase()} updated successfully`, 'success');
-                await updateStatus();
+                await sendCommand({ target, mode, action });
+                showToast(`${target.toUpperCase()} command sent`, 'success');
             } catch (e) {
                 showToast(`Command failed: ${e.message}`, 'error');
             }
@@ -1282,34 +1339,60 @@
         async function loadCharts() {
             try {
                 const customTarget = getSavedTargetUrl();
-                const isLocalHost = window.location.hostname.includes('192.168.') || window.location.hostname.includes('local');
+                // Normalize both sources to { t: <epoch-ms>, height? } so the chart
+                // code below is identical regardless of where the data came from.
+                let heightPoints = [];
+                let waterPoints = [];
 
-                // Determine chart endpoint: Netlify history API (Supabase) vs Local SPIFFS
-                let heightUrl = '/.netlify/functions/history?type=height';
-                let waterUrl = '/.netlify/functions/history?type=water';
-
-                if (customTarget || isLocalHost) {
-                    const base = customTarget ? customTarget.replace(/\/$/, '') : '';
-                    heightUrl = `${base}/heightHistory`;
-                    waterUrl = `${base}/waterEvents`;
+                if (customTarget) {
+                    // LAN mode: read the device's SPIFFS logs directly.
+                    // These store `time` as epoch-SECONDS (millis()/1000).
+                    const base = customTarget.replace(/\/$/, '');
+                    const [hRes, wRes] = await Promise.all([
+                        fetchWithTimeout(`${base}/heightHistory`, { timeout: 2500 }).catch(() => null),
+                        fetchWithTimeout(`${base}/waterEvents`, { timeout: 2500 }).catch(() => null)
+                    ]);
+                    const hArr = (hRes && hRes.ok) ? await hRes.json() : [];
+                    const wArr = (wRes && wRes.ok) ? await wRes.json() : [];
+                    heightPoints = (Array.isArray(hArr) ? hArr : [])
+                        .map(d => ({ t: (Number(d.time) || 0) * 1000, height: Number(d.height) || 0 }));
+                    waterPoints = (Array.isArray(wArr) ? wArr : [])
+                        .map(d => ({ t: (Number(d.time) || 0) * 1000 }));
+                } else {
+                    // Cloud mode: read the Firebase history nodes over the SDK.
+                    // The device writes `ts` as epoch-MILLISECONDS via nowMs().
+                    const [hSnap, wSnap] = await Promise.all([
+                        firebaseDb.ref('history').limitToLast(60).once('value'),
+                        firebaseDb.ref('waterEvents').limitToLast(30).once('value')
+                    ]);
+                    heightPoints = Object.values(hSnap.val() || {})
+                        .filter(d => d && typeof d.ts === 'number')
+                        .map(d => ({ t: d.ts, height: Number(d.height) || 0 }))
+                        .sort((a, b) => a.t - b.t);
+                    waterPoints = Object.values(wSnap.val() || {})
+                        .filter(d => d && typeof d.ts === 'number')
+                        .map(d => ({ t: d.ts }))
+                        .sort((a, b) => a.t - b.t);
                 }
 
-                const heightRes = await fetchWithTimeout(heightUrl, { timeout: 2500 }).catch(() => null);
-                const heightData = (heightRes && heightRes.ok) ? await heightRes.json() : [
-                    { time: Date.now() / 1000 - 86400 * 3, height: 1.2 },
-                    { time: Date.now() / 1000 - 86400 * 2, height: 2.4 },
-                    { time: Date.now() / 1000 - 86400 * 1, height: 3.8 },
-                    { time: Date.now() / 1000, height: 4.8 }
-                ];
+                // Demo fallbacks so the charts still render before any data exists.
+                if (!heightPoints.length) {
+                    const now = Date.now();
+                    heightPoints = [
+                        { t: now - 86400000 * 3, height: 1.2 },
+                        { t: now - 86400000 * 2, height: 2.4 },
+                        { t: now - 86400000, height: 3.8 },
+                        { t: now, height: 4.8 }
+                    ];
+                }
+                if (!waterPoints.length) {
+                    const now = Date.now();
+                    waterPoints = [{ t: now - 3600000 * 5 }, { t: now - 3600000 * 2 }];
+                }
 
-                const waterRes = await fetchWithTimeout(waterUrl, { timeout: 2500 }).catch(() => null);
-                const waterData = (waterRes && waterRes.ok) ? await waterRes.json() : [
-                    { time: Date.now() / 1000 - 3600 * 5 },
-                    { time: Date.now() / 1000 - 3600 * 2 }
-                ];
-
-                const heightLabels = heightData.map(d => new Date(d.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-                const heightValues = heightData.map(d => d.height);
+                const fmtTime = ms => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const heightLabels = heightPoints.map(d => fmtTime(d.t));
+                const heightValues = heightPoints.map(d => d.height);
 
                 const heightCtx = document.getElementById('heightChart').getContext('2d');
                 if (heightChart) heightChart.destroy();
@@ -1345,8 +1428,8 @@
                     }
                 });
 
-                const waterLabels = waterData.map(d => new Date(d.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-                const waterValues = waterData.map((_, idx) => idx + 1);
+                const waterLabels = waterPoints.map(d => fmtTime(d.t));
+                const waterValues = waterPoints.map((_, idx) => idx + 1);
 
                 const waterCtx = document.getElementById('waterChart').getContext('2d');
                 if (waterChart) waterChart.destroy();
@@ -1389,12 +1472,19 @@
             }
         }, 1000);
 
-        setInterval(updateStatus, 3000);
-        setInterval(loadCharts, 15000);
+        // Start whichever data path matches the current ⚙️ Target setting:
+        // cloud mode opens the /live websocket, LAN mode polls the device.
+        // (applyConnectionMode also kicks off loadCharts once.)
+        applyConnectionMode();
 
-        updateStatus();
-        loadCharts();
-    </script>
+        // The /live websocket stays open even after the device stops publishing,
+        // so re-derive the freshness pill on a timer from the last timestamp.
+        // (No-op in LAN mode, where pollLan owns the pill.)
+        setInterval(evaluateLiveFreshness, 3000);
+
+        // Refresh the history charts periodically.
+        setInterval(loadCharts, 30000);
+</script>
 </body>
 
 </html>

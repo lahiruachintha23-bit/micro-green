@@ -3,3 +3,9 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# WiFi credentials — copy include/secrets.example.h to include/secrets.h
+include/secrets.h
+
+node_modules/
+.netlify/

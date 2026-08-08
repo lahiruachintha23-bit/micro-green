@@ -6,6 +6,9 @@
 #include "DHT.h"
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include "secrets.h"
+#include <time.h>
+#include <sys/time.h>
 
 // ==================== Pin Definitions ====================
 // Ultrasonic sensor
@@ -51,32 +54,50 @@
 #define HUMIDITY_THRESHOLD 60 // % - turn fans on if humidity > this
 // Mister spray duration
 #define MISTER_SPRAY_DURATION 10000 // milliseconds (10 seconds)
+// Hard ceiling on a continuous "Manual On" spray. A mister left on from a phone
+// that then loses signal will otherwise keep running until someone walks to the
+// tray. Raise or remove this if you genuinely want unbounded manual misting.
+#define MISTER_MAX_CONTINUOUS_MS 300000 // 5 minutes
 // Germination period for mister operation
 #define GERMINATION_PERIOD_DAYS 3 // days after first motor trigger
 
-// WiFi configuration
-const char *STA_SSID = "HUAWEI Y9 Prime 2019";
-const char *STA_PASSWORD = "lasantha";
+// WiFi configuration — station credentials live in include/secrets.h (gitignored).
+const char *STA_SSID = SECRET_STA_SSID;
+const char *STA_PASSWORD = SECRET_STA_PASSWORD;
 const char *AP_SSID = "MicrogreenTray_AP";
 const char *AP_PASSWORD = "microgreen123";
 
 // ==================== Firebase Realtime Database Configuration ====================
 // ESP32 pushes telemetry to Firebase and polls for pending commands.
 // This avoids requiring the cloud to reach the board directly from the private home network.
-const char *FIREBASE_DB_BASE = "https://microgreen-system-default-rtdb.firebaseio.com";
+const char *FIREBASE_DB_BASE = SECRET_FIREBASE_DB_BASE;
 
 // Timing for Firebase tasks
-unsigned long lastSupabasePushTime = 0;
-const unsigned long SUPABASE_PUSH_INTERVAL = 30000; // 30 seconds
+// Firebase timing. /live is the realtime feed the dashboard subscribes to and is
+// published frequently; the rest are lower frequency (a heartbeat node, history
+// samples for charts, and the command poll).
+unsigned long lastLivePublishTime = 0;
+const unsigned long LIVE_PUBLISH_INTERVAL = 2000; // 2 seconds
+unsigned long lastHeartbeatTime = 0;
+const unsigned long HEARTBEAT_INTERVAL = 30000; // 30 seconds
+unsigned long lastHistoryPushTime = 0;
+const unsigned long HISTORY_PUSH_INTERVAL = 300000; // 5 minutes
 unsigned long lastCommandPollTime = 0;
 const unsigned long COMMAND_POLL_INTERVAL = 5000; // 5 seconds
 
 // Forward declarations for Firebase helpers (defined after SPIFFS helpers below)
-int supabasePost(const char *path, const String &jsonBody);
-int supabasePatch(const char *path, const String &jsonBody);
-String supabaseGet(const char *path);
-void supabasePushWaterEvent(const String &eventType, const String &details);
+int firebasePost(const char *path, const String &jsonBody);
+int firebasePatch(const char *path, const String &jsonBody);
+int firebasePut(const char *path, const String &jsonBody);
+int firebaseDelete(const char *path);
+String firebaseGet(const char *path);
+void firebasePushWaterEvent(const String &eventType, const String &details);
+void firebasePushHistory();
+void firebasePublishLive();
 void updateFirebaseHeartbeat();
+uint64_t nowMs();
+bool timeSynced();
+
 
 WebServer server(80);
 
@@ -100,6 +121,9 @@ bool fansActive = false;
 bool misterActive = false;
 unsigned long misterSprayStartTime = 0;
 bool misterSprayInProgress = false;
+// True when the current spray is a one-shot that must auto-stop after
+// MISTER_SPRAY_DURATION. False for a continuous "Manual On" spray.
+bool misterSprayTimed = false;
 
 // Germination tracking
 unsigned long germinationStartTime = 0; // millis() when motor first triggers
@@ -322,6 +346,29 @@ String getMisterModeLabel()
   return "Auto";
 }
 
+// Starts a spray that is guaranteed to stop after MISTER_SPRAY_DURATION.
+// Deliberately does NOT change misterMode: latching the mode to "ManualOn" here
+// used to route the state machine past every branch that could switch the relay
+// back off, so the mister ran until someone sent an explicit stop.
+void startMisterOneShot()
+{
+  digitalWrite(WATER_MISTER_RELAY, LOW); // ON
+  misterSprayInProgress = true;
+  misterSprayTimed = true;
+  misterSprayStartTime = millis();
+  Serial.println("Mister spray START - one-shot, auto-stop armed");
+}
+
+// Immediately stops any spray, timed or continuous.
+void stopMisterNow(const char *reason)
+{
+  digitalWrite(WATER_MISTER_RELAY, HIGH); // OFF
+  misterSprayInProgress = false;
+  misterSprayTimed = false;
+  Serial.print("Mister spray STOP - ");
+  Serial.println(reason);
+}
+
 // ==================== SPIFFS Data Functions ====================
 void logHeightData(long height)
 {
@@ -405,8 +452,8 @@ void logWaterEvent()
   serializeJson(doc, file);
   file.close();
 
-  // Also push to Supabase if WiFi is connected (forward-declared below)
-  supabasePushWaterEvent("pump_on", "Irrigation pump activated");
+  // Also push to Firebase if WiFi is connected (forward-declared below)
+  firebasePushWaterEvent("pump_on", "Irrigation pump activated");
 }
 
 String readHeightHistory()
@@ -436,7 +483,7 @@ String readWaterEvents()
 // ==================== Firebase Helper ====================
 // Sends an HTTPS POST to the Firebase Realtime Database endpoint.
 // Returns the HTTP response code (-1 on failure).
-int supabasePost(const char *path, const String &jsonBody)
+int firebasePost(const char *path, const String &jsonBody)
 {
   if (WiFi.status() != WL_CONNECTED)
     return -1;
@@ -456,7 +503,7 @@ int supabasePost(const char *path, const String &jsonBody)
 }
 
 // Sends an HTTPS PATCH to the Firebase Realtime Database endpoint.
-int supabasePatch(const char *path, const String &jsonBody)
+int firebasePatch(const char *path, const String &jsonBody)
 {
   if (WiFi.status() != WL_CONNECTED)
     return -1;
@@ -475,8 +522,51 @@ int supabasePatch(const char *path, const String &jsonBody)
   return code;
 }
 
+// Sends an HTTPS PUT (overwrite) to the Firebase Realtime Database endpoint.
+// PUT replaces the node at `path` wholesale, so it keeps hot state in a single
+// node instead of appending a new push key every call the way POST does.
+int firebasePut(const char *path, const String &jsonBody)
+{
+  if (WiFi.status() != WL_CONNECTED)
+    return -1;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  String url = String(FIREBASE_DB_BASE) + String(path) + ".json";
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(8000);
+
+  int code = http.sendRequest("PUT", (uint8_t *)jsonBody.c_str(), jsonBody.length());
+  http.end();
+  return code;
+}
+
+// Sends an HTTPS DELETE to the Firebase Realtime Database endpoint. Used to
+// remove a command once it has been executed, so /commands does not grow without
+// bound (which would eventually overflow the fixed JSON buffer in the poller).
+int firebaseDelete(const char *path)
+{
+  if (WiFi.status() != WL_CONNECTED)
+    return -1;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  String url = String(FIREBASE_DB_BASE) + String(path) + ".json";
+  http.begin(client, url);
+  http.setTimeout(8000);
+
+  int code = http.sendRequest("DELETE");
+  http.end();
+  return code;
+}
+
 // Sends an HTTPS GET and returns the response body string.
-String supabaseGet(const char *path)
+String firebaseGet(const char *path)
 {
   if (WiFi.status() != WL_CONNECTED)
     return "";
@@ -498,8 +588,29 @@ String supabaseGet(const char *path)
   return body;
 }
 
-// ==================== Supabase Push: Sensor Readings ====================
-void supabasePushSensorData()
+// ==================== Time (NTP) ====================
+// True once the clock has been set from NTP. Before sync, time(nullptr) sits near
+// 0 (the epoch), so this guards against publishing uptime-relative garbage as if
+// it were a wall-clock timestamp.
+bool timeSynced()
+{
+  return time(nullptr) > 1700000000; // ~2023-11-14; proves the clock is real
+}
+
+// Wall-clock epoch milliseconds. Valid only after NTP sync (see setup()); the
+// dashboard uses this to judge whether the device is online, so it must be real
+// epoch time, not millis() uptime.
+uint64_t nowMs()
+{
+  struct timeval tv;
+  gettimeofday(&tv, nullptr);
+  return (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)tv.tv_usec / 1000ULL;
+}
+
+// ==================== Firebase Push: History Sample ====================
+// Appends one sample to /history for the dashboard charts. Called every few
+// minutes (not every loop), so unbounded growth is slow and is pruned separately.
+void firebasePushHistory()
 {
   // Guard: Only push if WiFi is connected as STA (not AP-only mode)
   if (WiFi.status() != WL_CONNECTED)
@@ -513,37 +624,93 @@ void supabasePushSensorData()
   // Firebase Realtime Database accepts a JSON object and creates a push key when POST is used.
   char body[320];
   snprintf(body, sizeof(body),
-           "{\"temperature\":%s,\"humidity\":%s,\"flow\":%s,\"soil\":%d,\"height\":%ld,\"stage\":\"%s\",\"timestamp\":%lu}",
+           "{\"temperature\":%s,\"humidity\":%s,\"flow\":%s,\"soil\":%d,\"height\":%ld,\"stage\":\"%s\",\"ts\":%llu}",
            tempStr, humStr, flowStr,
            analogRead(SOIL_PIN),
            currentHeight,
            growthStage.c_str(),
-           millis() / 1000);
+           (unsigned long long)nowMs());
 
-  int code = supabasePost("/sensorReadings", String(body));
+  int code = firebasePost("/history", String(body));
   if (code == 201 || code == 200)
   {
-    Serial.println("[Firebase] Sensor data pushed OK");
+    Serial.println("[Firebase] History sample pushed OK");
   }
   else
   {
-    Serial.print("[Firebase] Sensor push failed, HTTP code: ");
+    Serial.print("[Firebase] History push failed, HTTP code: ");
+    Serial.println(code);
+  }
+}
+
+// ==================== Firebase Publish: Live State ====================
+// PUT (overwrite) the full device state to /live every couple of seconds.
+// The dashboard subscribes to this single node over a websocket. The field
+// vocabulary MUST match handleStatus() so the browser render code is identical
+// whether it reads the device directly (LAN) or /live (remote).
+void firebasePublishLive()
+{
+  if (WiFi.status() != WL_CONNECTED)
+    return;
+
+  char flowStr[16], tempStr[16], humStr[16];
+  dtostrf(flow_ml_min, 5, 1, flowStr);
+  dtostrf(temperature, 5, 1, tempStr);
+  dtostrf(humidity, 5, 1, humStr);
+
+  String pumpModeLabel = getPumpModeLabel();
+  String pumpStateLabel = getPumpState();
+  unsigned long daysSinceGerm = getDaysSinceGermination();
+  String fanModeLabel = getFanModeLabel();
+  String misterModeLabel = getMisterModeLabel();
+  bool wifiConnected = WiFi.status() == WL_CONNECTED;
+  String wifiMode = (WiFi.getMode() == WIFI_AP) ? "AP" : (WiFi.getMode() == WIFI_STA) ? "STA"
+                                                                                      : "OFF";
+
+  char body[1500];
+  snprintf(body, sizeof(body),
+           "{\"distance\":%ld,\"growthStage\":\"%s\",\"soilValue\":%d,\"flowValue\":%s,\"pumpMode\":\"%s\",\"pumpState\":\"%s\",\"motorStatus\":\"%s\",\"temperature\":%s,\"humidity\":%s,\"floatSwitch\":%s,\"fansActive\":%s,\"fanMode\":\"%s\",\"misterActive\":%s,\"misterMode\":\"%s\",\"daysSinceGermination\":%lu,\"wifiConnected\":%s,\"wifiMode\":\"%s\",\"deviceIp\":\"%s\",\"connectionStatus\":\"%s\",\"ts\":%llu}",
+           currentHeight,
+           growthStage.c_str(),
+           analogRead(SOIL_PIN),
+           flowStr,
+           pumpModeLabel.c_str(),
+           pumpStateLabel.c_str(),
+           motorRunning ? "ON" : "OFF",
+           tempStr,
+           humStr,
+           floatSwitchState ? "true" : "false",
+           fansActive ? "true" : "false",
+           fanModeLabel.c_str(),
+           misterSprayInProgress ? "true" : "false",
+           misterModeLabel.c_str(),
+           daysSinceGerm,
+           wifiConnected ? "true" : "false",
+           wifiMode.c_str(),
+           WiFi.localIP().toString().c_str(),
+           wifiConnected ? "online" : "offline",
+           (unsigned long long)nowMs());
+
+  int code = firebasePut("/live", String(body));
+  if (code != 200)
+  {
+    Serial.print("[Firebase] Live publish failed, HTTP code: ");
     Serial.println(code);
   }
 }
 
 // ==================== Firebase Push: Water Event ====================
-void supabasePushWaterEvent(const String &eventType, const String &details)
+void firebasePushWaterEvent(const String &eventType, const String &details)
 {
   if (WiFi.status() != WL_CONNECTED)
     return;
 
   char body[200];
   snprintf(body, sizeof(body),
-           "{\"event_type\":\"%s\",\"details\":\"%s\",\"timestamp\":%lu}",
-           eventType.c_str(), details.c_str(), millis() / 1000);
+           "{\"event_type\":\"%s\",\"details\":\"%s\",\"ts\":%llu}",
+           eventType.c_str(), details.c_str(), (unsigned long long)nowMs());
 
-  int code = supabasePost("/waterEvents", String(body));
+  int code = firebasePost("/waterEvents", String(body));
   if (code == 201 || code == 200)
   {
     Serial.println("[Firebase] Water event pushed OK");
@@ -560,15 +727,17 @@ void updateFirebaseHeartbeat()
   if (WiFi.status() != WL_CONNECTED)
     return;
 
-  char body[128];
+  char body[160];
   snprintf(body, sizeof(body),
-           "{\"online\":true,\"lastSeen\":%lu,\"wifiMode\":\"%s\",\"ip\":\"%s\"}",
-           millis() / 1000,
+           "{\"online\":true,\"lastSeen\":%llu,\"wifiMode\":\"%s\",\"ip\":\"%s\"}",
+           (unsigned long long)nowMs(),
            WiFi.getMode() == WIFI_STA ? "STA" : "AP",
            WiFi.localIP().toString().c_str());
 
-  int code = supabasePost("/deviceStatus", String(body));
-  if (code == 201 || code == 200)
+  // PUT (overwrite) so /deviceStatus stays a single node instead of growing
+  // an append per heartbeat forever.
+  int code = firebasePut("/deviceStatus", String(body));
+  if (code == 200)
   {
     Serial.println("[Firebase] Heartbeat pushed OK");
   }
@@ -579,11 +748,11 @@ void updateFirebaseHeartbeat()
   }
 }
 
-// ==================== Supabase Poll: Pending Commands ====================
-// Execute a command string received from Supabase (same logic as web handlers)
+// ==================== Firebase Poll: Pending Commands ====================
+// Execute a command string received from Firebase (same logic as web handlers)
 void executeCloudCommand(const String &action)
 {
-  Serial.print("[Supabase] Executing cloud command: ");
+  Serial.print("[Firebase] Executing cloud command: ");
   Serial.println(action);
 
   if (action == "motor_on" || action == "on")
@@ -643,16 +812,12 @@ void executeCloudCommand(const String &action)
   }
   else if (action == "mister_spray" || action == "spray")
   {
-    misterMode = "ManualOn";
-    digitalWrite(WATER_MISTER_RELAY, LOW);
-    misterSprayInProgress = true;
-    misterSprayStartTime = millis();
+    startMisterOneShot();
   }
   else if (action == "mister_off")
   {
     misterMode = "ManualOff";
-    digitalWrite(WATER_MISTER_RELAY, HIGH);
-    misterSprayInProgress = false;
+    stopMisterNow("mister_off command");
   }
   else if (action == "mister_auto")
   {
@@ -660,23 +825,26 @@ void executeCloudCommand(const String &action)
   }
   else
   {
-    Serial.print("[Supabase] Unknown command ignored: ");
+    Serial.print("[Firebase] Unknown command ignored: ");
     Serial.println(action);
   }
 }
 
-void supabasePollCommands()
+void firebasePollCommands()
 {
   if (WiFi.status() != WL_CONNECTED)
     return;
 
   // GET pending commands from Firebase Realtime Database.
-  String body = supabaseGet("/commands");
+  String body = firebaseGet("/commands");
 
   if (body.isEmpty() || body == "null" || body == "{}")
     return;
 
-  StaticJsonDocument<1024> doc;
+  // Buffer sized for a handful of queued commands. Commands are DELETEd after
+  // execution (see below), so /commands never accumulates — but size for slack
+  // in case several arrive between polls.
+  StaticJsonDocument<2048> doc;
   DeserializationError err = deserializeJson(doc, body);
   if (err || !doc.is<JsonObject>())
     return;
@@ -687,22 +855,22 @@ void supabasePollCommands()
     const char *id = kv.key().c_str();
     JsonObject cmd = kv.value().as<JsonObject>();
     const char *action = cmd["action"];
-    const char *status = cmd["status"];
 
     if (!action || !id)
       continue;
 
-    if (status && String(status) == "pending")
-    {
-      String actionStr = String(action);
-      executeCloudCommand(actionStr);
+    // Execute then DELETE. We no longer filter on status=="pending": a command
+    // that exists in /commands is one the device hasn't consumed yet, because
+    // executing it removes it. This keeps /commands from growing without bound
+    // (the old status-patch left every command in place forever, and the whole
+    // node was GET-ed into a fixed buffer each poll).
+    String actionStr = String(action);
+    executeCloudCommand(actionStr);
 
-      String patchPath = "/commands/" + String(id);
-      supabasePatch(patchPath.c_str(), "{\"status\":\"executed\"}");
-      Serial.print("[Firebase] Command marked executed: ");
-      Serial.println(id);
-      break;
-    }
+    String delPath = "/commands/" + String(id);
+    firebaseDelete(delPath.c_str());
+    Serial.print("[Firebase] Command executed and removed: ");
+    Serial.println(id);
   }
 }
 
@@ -1359,9 +1527,7 @@ void handleMisterControl()
       misterMode = mode;
       if (mode == "ManualOff")
       {
-        digitalWrite(WATER_MISTER_RELAY, HIGH);
-        misterSprayInProgress = false;
-        Serial.println("Mister turned OFF (manual)");
+        stopMisterNow("manual mode set to Off");
       }
       server.send(200, "text/plain", "OK");
     }
@@ -1372,11 +1538,7 @@ void handleMisterControl()
   }
   else if (action == "spray")
   {
-    // Manual spray for 10 seconds
-    misterSprayInProgress = true;
-    misterSprayStartTime = millis();
-    digitalWrite(WATER_MISTER_RELAY, LOW);
-    Serial.println("Mister spray triggered (manual) - 10 seconds");
+    startMisterOneShot();
     server.send(200, "text/plain", "OK");
   }
   else
@@ -1580,6 +1742,34 @@ void setup()
     Serial.println(STA_SSID);
     Serial.print("Local IP: ");
     Serial.println(WiFi.localIP());
+
+    // NTP time sync. Every Firebase timestamp (/live ts, /history ts,
+    // heartbeat lastSeen, water events) is epoch milliseconds, which requires a
+    // real wall clock. Without this the RTC starts at the Unix epoch on every
+    // boot, so the dashboard's freshness check (Date.now() - ts) always sees a
+    // ~56-year gap and reports the device offline even while it is publishing.
+    // It also drives the 6am/6pm mister schedule in loop(), which is otherwise
+    // referenced to power-on time rather than actual local time.
+    // 19800 = UTC+5:30 (Asia/Colombo); no DST offset.
+    Serial.print("Syncing time via NTP");
+    configTime(19800, 0, "pool.ntp.org", "time.nist.gov");
+    unsigned long ntpStart = millis();
+    while (!timeSynced() && (millis() - ntpStart) < 10000)
+    {
+      delay(250);
+      Serial.print('.');
+    }
+    Serial.println();
+    if (timeSynced())
+    {
+      time_t nowSec = time(nullptr);
+      Serial.print("Time synced: ");
+      Serial.print(ctime(&nowSec));
+    }
+    else
+    {
+      Serial.println("Warning: NTP sync timed out; timestamps will be wrong until it succeeds");
+    }
   }
   else
   {
@@ -1743,19 +1933,40 @@ void loop()
   bool curtainOpen = motorTriggered; // Curtain opens after first motor trigger
   bool shouldMisterWork = (daysSinceGermination < GERMINATION_PERIOD_DAYS) && !curtainOpen;
 
+  // SAFETY: a spray must always have an end. Both checks sit outside the mode
+  // branches on purpose. The timed one used to live inside the "Auto" branch,
+  // which meant a cloud-triggered spray (that also set the mode to ManualOn)
+  // matched no branch at all and latched the relay on indefinitely.
+  if (misterSprayInProgress && misterSprayTimed &&
+      (millis() - misterSprayStartTime >= MISTER_SPRAY_DURATION))
+  {
+    stopMisterNow("timed spray complete");
+  }
+  else if (misterSprayInProgress && !misterSprayTimed &&
+           (millis() - misterSprayStartTime >= MISTER_MAX_CONTINUOUS_MS))
+  {
+    // A continuous spray hit its ceiling. The mode has to be forced off too:
+    // leaving it at "ManualOn" would let the branch below switch the relay
+    // straight back on the next time through loop().
+    misterMode = "ManualOff";
+    stopMisterNow("continuous spray hit max runtime");
+  }
+
   if (misterMode == "ManualOn" && !misterSprayInProgress)
   {
-    // Manual ON: keep spray active
+    // Manual ON: continuous spray, bounded only by MISTER_MAX_CONTINUOUS_MS
     digitalWrite(WATER_MISTER_RELAY, LOW); // ON
     misterSprayInProgress = true;
+    misterSprayTimed = false;
+    misterSprayStartTime = millis(); // stamped so the ceiling check above can fire
     Serial.println("Mister ON (manual continuous)");
   }
-  else if (misterMode == "ManualOff" && misterSprayInProgress)
+  else if (misterMode == "ManualOff" && misterSprayInProgress && !misterSprayTimed)
   {
-    // Manual OFF: stop spray
-    digitalWrite(WATER_MISTER_RELAY, HIGH); // OFF
-    misterSprayInProgress = false;
-    Serial.println("Mister OFF (manual)");
+    // Manual OFF stops a continuous spray. A one-shot is left to expire above so
+    // that "Spray Now" still works while the mode happens to be Off; an explicit
+    // mister_off command stops it immediately via stopMisterNow().
+    stopMisterNow("manual off");
   }
   else if (misterMode == "Auto" && shouldMisterWork)
   {
@@ -1775,10 +1986,8 @@ void loop()
       // Time for 6am spray
       if (!misterSprayInProgress)
       {
-        misterSprayInProgress = true;
-        misterSprayStartTime = millis();
-        digitalWrite(WATER_MISTER_RELAY, LOW); // ON
-        Serial.println("Mister spray START - 6am schedule");
+        Serial.println("Mister schedule: 6am");
+        startMisterOneShot();
       }
       spray6amDone = true;
       spray6pmDone = false; // reset PM flag
@@ -1788,10 +1997,8 @@ void loop()
       // Time for 6pm spray
       if (!misterSprayInProgress)
       {
-        misterSprayInProgress = true;
-        misterSprayStartTime = millis();
-        digitalWrite(WATER_MISTER_RELAY, LOW); // ON
-        Serial.println("Mister spray START - 6pm schedule");
+        Serial.println("Mister schedule: 6pm");
+        startMisterOneShot();
       }
       spray6pmDone = true;
       spray6amDone = false; // reset AM flag
@@ -1802,22 +2009,16 @@ void loop()
       spray6pmDone = false;
     }
 
-    // Stop spray after 10 seconds
-    if (misterSprayInProgress && (millis() - misterSprayStartTime >= MISTER_SPRAY_DURATION))
-    {
-      digitalWrite(WATER_MISTER_RELAY, HIGH); // OFF
-      misterSprayInProgress = false;
-      Serial.println("Mister spray STOP - 10 seconds completed");
-    }
+    // Timed sprays are stopped by the unconditional safety check at the top of
+    // this section, so there is no per-branch stop here any more.
   }
   else if (misterMode == "Auto")
   {
-    // After germination period or when curtain is open
-    if (misterSprayInProgress)
+    // After germination period or when curtain is open. A one-shot spray is
+    // allowed to finish; only a continuous spray is cut short here.
+    if (misterSprayInProgress && !misterSprayTimed)
     {
-      digitalWrite(WATER_MISTER_RELAY, HIGH); // OFF
-      misterSprayInProgress = false;
-      Serial.println("Mister spray STOP - Germination period ended or curtain open");
+      stopMisterNow("germination period ended or curtain open");
     }
   }
   if (millis() - lastFlowTime >= 1000)
@@ -1904,22 +2105,38 @@ void loop()
 
   server.handleClient();
 
-  // ----- Supabase: Push sensor readings every 30s (only when WiFi STA connected) -----
+  // ----- Firebase I/O (only when WiFi STA connected) -----
+  // Four independent cadences off one millis() read:
+  //   /live      PUT every 2s   -> what the dashboard subscribes to (realtime)
+  //   /commands  GET every 5s   -> pull + execute + DELETE queued commands
+  //   heartbeat  PUT every 30s  -> single-node liveness (/deviceStatus)
+  //   /history   POST every 5m  -> append a sample for the charts
   if (WiFi.status() == WL_CONNECTED)
   {
     unsigned long now = millis();
-    if (now - lastSupabasePushTime >= SUPABASE_PUSH_INTERVAL)
+
+    if (now - lastLivePublishTime >= LIVE_PUBLISH_INTERVAL)
     {
-      lastSupabasePushTime = now;
-      supabasePushSensorData();
-      updateFirebaseHeartbeat();
+      lastLivePublishTime = now;
+      firebasePublishLive();
     }
 
-    // ----- Firebase: Poll for pending commands every 5s -----
     if (now - lastCommandPollTime >= COMMAND_POLL_INTERVAL)
     {
       lastCommandPollTime = now;
-      supabasePollCommands();
+      firebasePollCommands();
+    }
+
+    if (now - lastHeartbeatTime >= HEARTBEAT_INTERVAL)
+    {
+      lastHeartbeatTime = now;
+      updateFirebaseHeartbeat();
+    }
+
+    if (now - lastHistoryPushTime >= HISTORY_PUSH_INTERVAL)
+    {
+      lastHistoryPushTime = now;
+      firebasePushHistory();
     }
   }
 
