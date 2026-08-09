@@ -308,11 +308,15 @@ void IRAM_ATTR countPulse()
 // dtostrf() right-justifies into a minimum field width, so dtostrf(v, 5, 1, buf)
 // yields "  0.0" — two leading spaces that then get spliced straight into the JSON
 // payload. Passing width 0 disables the padding and gives a clean bare number.
+// An unreadable sensor used to be reported as 0, which is a lie the dashboard
+// cannot see through: 0.0 °C is a legitimate reading. Emitting JSON null instead
+// lets the browser render "--" for genuinely missing data and a real number for
+// everything else.
 static void jsonFloat(float value, char *out, size_t outSize, int decimals)
 {
   if (isnan(value) || isinf(value))
   {
-    snprintf(out, outSize, "0");
+    snprintf(out, outSize, "null");
     return;
   }
   dtostrf(value, 0, decimals, out);

@@ -1271,18 +1271,27 @@
                 flowStatusEl.textContent = '✓ Safe';
             }
 
-            // Environmental Metrics
-            document.getElementById('tempVal').textContent = data.temperature ? `${data.temperature} °C` : '-- °C';
-            document.getElementById('humVal').textContent = data.humidity ? `${data.humidity} %` : '-- %';
+            // Environmental Metrics.
+            // These used to be rendered with a truthiness test, so a genuine 0 °C /
+            // 0 % reading displayed as "--" — indistinguishable from no data at all.
+            // Test for an actual finite number instead, and treat only null/absent
+            // (what the firmware sends when the DHT read fails) as "no data".
+            const tempNum = Number(data.temperature);
+            const hasTemp = data.temperature !== undefined && data.temperature !== null && Number.isFinite(tempNum);
+            document.getElementById('tempVal').textContent = hasTemp ? `${tempNum.toFixed(1)} °C` : '-- °C';
+
+            const humNum = Number(data.humidity);
+            const hasHum = data.humidity !== undefined && data.humidity !== null && Number.isFinite(humNum);
+            document.getElementById('humVal').textContent = hasHum ? `${humNum.toFixed(1)} %` : '-- %';
             const floatOk = data.floatSwitch === true || data.floatSwitch === 'true';
             const floatBadge = document.getElementById('floatSwitchBadge');
             floatBadge.className = 'stage-badge ' + (floatOk ? 'stage-germination' : 'stage-harvest');
             floatBadge.textContent = floatOk ? 'Float: Normal' : 'Float: Low Water';
 
             // Pump Control & Mode
-            const currentMode = data.pumpMode || 'Auto';
-            const currentState = data.pumpState || 'OFF';
-            document.getElementById('pumpMode').textContent = currentMode;
+            const currentMode = normalizeMode(data.pumpMode) || 'Auto';
+            const currentState = String(data.pumpState || 'OFF').toUpperCase();
+            document.getElementById('pumpMode').textContent = prettyMode(currentMode);
             document.getElementById('pumpState').textContent = currentState;
             const pumpPill = document.getElementById('pumpStatePill');
             pumpPill.className = 'stage-badge ' + (currentState === 'ON' ? 'stage-germination' : 'stage-unknown');
@@ -1420,6 +1429,22 @@
                 const modes = ['Auto', 'ManualOn', 'ManualOff'];
                 if (modes[idx] === mode) btn.classList.add('active');
             });
+        }
+
+        // The firmware reports a human-readable pump mode ("Manual On"), but the
+        // buttons, the command vocabulary and the pending-confirmation check all
+        // speak canonical tokens ("ManualOn"). Collapsing the whitespace on arrival
+        // is what lets a mode the device has genuinely applied count as
+        // confirmation. Without this every manual press sat "unconfirmed" for 15 s
+        // and no button ever highlighted, even though the pump had already switched.
+        function normalizeMode(mode) {
+            return String(mode ?? '').replace(/\s+/g, '');
+        }
+
+        function prettyMode(mode) {
+            if (mode === 'ManualOn') return 'Manual On';
+            if (mode === 'ManualOff') return 'Manual Off';
+            return mode || 'Auto';
         }
 
         async function loadCharts() {
