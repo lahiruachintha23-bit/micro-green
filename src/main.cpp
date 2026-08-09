@@ -36,7 +36,7 @@
 
 // ==================== Constants ====================
 // Motor run time (ms)
-#define MOTOR_RUN_TIME 12000 // 12 seconds
+#define MOTOR_RUN_TIME 5000 // 5 seconds
 // Soil threshold (wet when > value)
 #define SOIL_THRESHOLD 2000
 // Flow threshold (ml/min) – legacy "high flow" warning level shown on the dashboard.
@@ -152,7 +152,9 @@ bool misterScheduledToday_6pm = false;
 bool motorTriggered = false; // trigger only once
 bool motorRunning = false;   // currently running
 unsigned long motorStartTime = 0;
-bool motorManualMode = false; // manual override
+bool motorManualMode = false;        // manual override
+// Direction of the last/current run: +1 = raise (IN1 high), -1 = lower (IN2 high), 0 = stopped
+int motorDirection = 0;
 
 // Flow sensor
 volatile unsigned long pulseCount = 0;     // pulses counted in the current window
@@ -320,6 +322,48 @@ static void jsonFloat(float value, char *out, size_t outSize, int decimals)
     return;
   }
   dtostrf(value, 0, decimals, out);
+}
+
+// ==================== Tray Height Stepper (H-bridge) ====================
+// The tray motor runs through an H-bridge, so swapping the two inputs reverses
+// direction. Both inputs LOW = stop/coast. Both HIGH would be shoot-through and
+// is never driven.
+//   dir = +1 -> raise  (IN1 HIGH, IN2 LOW)
+//   dir = -1 -> lower  (IN1 LOW,  IN2 HIGH)
+// Every run is time-boxed by MOTOR_RUN_TIME and stopped in loop(), so a dropped
+// dashboard command can never leave the tray driving indefinitely.
+void motorStart(int dir, bool manual)
+{
+  if (dir == 0)
+    return;
+  motorDirection = (dir > 0) ? 1 : -1;
+  digitalWrite(IN1, motorDirection > 0 ? HIGH : LOW);
+  digitalWrite(IN2, motorDirection > 0 ? LOW : HIGH);
+  motorRunning = true;
+  motorManualMode = manual;
+  motorStartTime = millis();
+  Serial.print("Motor ");
+  Serial.print(motorDirection > 0 ? "RAISE" : "LOWER");
+  Serial.print(" for ");
+  Serial.print(MOTOR_RUN_TIME / 1000.0, 1);
+  Serial.println(" seconds");
+}
+
+void motorStop()
+{
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  motorRunning = false;
+  motorManualMode = false;
+  motorDirection = 0;
+}
+
+// Dashboard-facing state: OFF / RAISING / LOWERING.
+const char *motorStatusLabel()
+{
+  if (!motorRunning)
+    return "OFF";
+  return motorDirection > 0 ? "RAISING" : "LOWERING";
 }
 
 // ==================== Distance Measurement ====================
@@ -738,7 +782,7 @@ void firebasePublishLive()
            pumpFlowFault ? "true" : "false",
            pumpModeLabel.c_str(),
            pumpStateLabel.c_str(),
-           motorRunning ? "ON" : "OFF",
+           motorStatusLabel(),
            tempStr,
            humStr,
            floatSwitchState ? "true" : "false",
@@ -817,28 +861,27 @@ void executeCloudCommand(const String &action)
   Serial.print("[Firebase] Executing cloud command: ");
   Serial.println(action);
 
-  if (action == "motor_on" || action == "on")
+  if (action == "motor_up" || action == "up" || action == "motor_raise" || action == "raise")
   {
-    digitalWrite(IN1, HIGH);
-    digitalWrite(IN2, LOW);
-    motorRunning = true;
-    motorManualMode = true;
-    motorStartTime = millis();
+    motorStart(+1, true);
+  }
+  else if (action == "motor_down" || action == "down" || action == "motor_lower" || action == "lower")
+  {
+    motorStart(-1, true);
+  }
+  else if (action == "motor_on" || action == "on")
+  {
+    // Legacy single-direction command, kept so older clients keep working.
+    motorStart(+1, true);
   }
   else if (action == "motor_off" || action == "off")
   {
-    digitalWrite(IN1, LOW);
-    digitalWrite(IN2, LOW);
-    motorRunning = false;
-    motorManualMode = false;
+    motorStop();
   }
   else if (action == "motor_reset" || action == "reset")
   {
-    digitalWrite(IN1, LOW);
-    digitalWrite(IN2, LOW);
-    motorRunning = false;
+    motorStop();
     motorTriggered = false;
-    motorManualMode = false;
   }
   else if (action == "pump_auto" || action == "Auto")
   {
@@ -1160,10 +1203,11 @@ void handleRoot()
       </div>
 
       <div class="card">
-        <div class="stat-label">Motor Control</div>
+        <div class="stat-label">Tray Height (manual only)</div>
         <div class="controls">
-          <button class="btn-success" onclick="motorAction('on')">Motor ON</button>
-          <button class="btn-danger" onclick="motorAction('off')">Motor OFF</button>
+          <button class="btn-success" onclick="motorAction('up')">&#9650; Raise</button>
+          <button class="btn-success" onclick="motorAction('down')">&#9660; Lower</button>
+          <button class="btn-danger" onclick="motorAction('off')">Stop</button>
           <button class="btn-default" onclick="motorAction('reset')">Reset</button>
         </div>
         <div class="status-grid" style="margin-top: 15px;">
@@ -1446,7 +1490,7 @@ void handleStatus()
            pumpFlowFault ? "true" : "false",
            pumpModeLabel.c_str(),
            pumpStateLabel.c_str(),
-           motorRunning ? "ON" : "OFF",
+           motorStatusLabel(),
            tempStr,
            humStr,
            floatSwitchState ? "true" : "false",
@@ -1513,30 +1557,31 @@ void handleMotorControl()
     return;
   }
   String action = server.arg("action");
-  if (action == "on")
+  if (action == "up" || action == "raise")
   {
-    motorManualMode = true;
-    digitalWrite(IN1, HIGH);
-    digitalWrite(IN2, LOW);
-    motorRunning = true;
-    motorStartTime = millis();
-    server.send(200, "text/plain", "Motor ON");
+    motorStart(+1, true);
+    server.send(200, "text/plain", "Motor RAISING");
+  }
+  else if (action == "down" || action == "lower")
+  {
+    motorStart(-1, true);
+    server.send(200, "text/plain", "Motor LOWERING");
+  }
+  else if (action == "on")
+  {
+    // legacy single-direction clients: treat as raise
+    motorStart(+1, true);
+    server.send(200, "text/plain", "Motor RAISING");
   }
   else if (action == "off")
   {
-    digitalWrite(IN1, LOW);
-    digitalWrite(IN2, LOW);
-    motorRunning = false;
-    motorManualMode = false;
+    motorStop();
     server.send(200, "text/plain", "Motor OFF");
   }
   else if (action == "reset")
   {
+    motorStop();
     motorTriggered = false;
-    motorManualMode = false;
-    motorRunning = false;
-    digitalWrite(IN1, LOW);
-    digitalWrite(IN2, LOW);
     server.send(200, "text/plain", "Motor RESET");
   }
   else
@@ -1926,22 +1971,14 @@ void loop()
   }
 
   // ----- 2. Motor driver logic -----
-  if (!motorManualMode && distance > 0 && distance <= 17 && !motorTriggered && !motorRunning)
-  {
-    digitalWrite(IN1, HIGH);
-    digitalWrite(IN2, LOW);
-    motorRunning = true;
-    motorStartTime = millis();
-    Serial.println("Motor ON for 12 seconds");
-  }
+  // Tray height is MANUAL ONLY. The distance-based auto-trigger is intentionally
+  // disabled: the tray moves solely on an explicit up/down command from the
+  // dashboard (cloud) or the LAN /motor endpoint.
 
   if (motorRunning && (millis() - motorStartTime >= MOTOR_RUN_TIME))
   {
-    digitalWrite(IN1, LOW);
-    digitalWrite(IN2, LOW);
-    motorRunning = false;
+    motorStop();
     motorTriggered = true;
-    motorManualMode = false;
     Serial.println("Motor OFF");
 
     // Save germination time on first motor trigger

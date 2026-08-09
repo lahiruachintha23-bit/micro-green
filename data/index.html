@@ -907,10 +907,12 @@
                     <span id="motorStatusBadge" class="stage-badge stage-unknown">OFF</span>
                 </div>
                 <div class="control-btns" style="margin-top: 10px;">
-                    <button class="btn btn-success" onclick="motorAction('on')">Motor ON</button>
-                    <button class="btn btn-danger" onclick="motorAction('off')">Motor OFF</button>
+                    <button class="btn btn-success" onclick="motorAction('up')">▲ Raise</button>
+                    <button class="btn btn-success" onclick="motorAction('down')">▼ Lower</button>
+                    <button class="btn btn-danger" onclick="motorAction('off')">Stop</button>
                     <button class="btn btn-neutral" onclick="motorAction('reset')">Reset / Zero</button>
                 </div>
+                <p style="margin-top: 10px; font-size: 0.78rem; color: var(--text-muted);">Manual only &mdash; each press runs the motor for 5 seconds, then stops.</p>
                 <div class="status-grid" style="margin-top: 12px;">
                     <div class="status-box">
                         <label>Motor State</label>
@@ -1305,11 +1307,12 @@
                 updateModeButtons(currentMode);
             }
 
-            // Motor Status
+            // Motor Status ('OFF' | 'RAISING' | 'LOWERING'; older firmware sent 'ON')
             const motorSt = data.motorStatus || 'OFF';
+            const motorMoving = motorSt !== 'OFF';
             document.getElementById('motorStatus').textContent = motorSt;
             const motorBadge = document.getElementById('motorStatusBadge');
-            motorBadge.className = 'stage-badge ' + (motorSt === 'ON' ? 'stage-germination' : 'stage-unknown');
+            motorBadge.className = 'stage-badge ' + (motorMoving ? 'stage-germination' : 'stage-unknown');
             motorBadge.textContent = motorSt;
 
             // Diagnostics
@@ -1332,6 +1335,8 @@
                 if (mode === 'ClearFault') return 'pump_fault_clear';
                 return mode === 'ManualOn' ? 'pump_on' : mode === 'ManualOff' ? 'pump_off' : 'pump_auto';
             }
+            if (action === 'up' || action === 'raise') return 'motor_up';
+            if (action === 'down' || action === 'lower') return 'motor_down';
             if (action === 'on') return 'motor_on';
             if (action === 'off') return 'motor_off';
             if (action === 'reset') return 'motor_reset';
@@ -1402,12 +1407,15 @@
             }
         }
 
+        const MOTOR_ACTION_LABELS = { up: 'RAISE', down: 'LOWER', off: 'STOP', reset: 'RESET' };
+
         async function motorAction(action) {
+            const label = MOTOR_ACTION_LABELS[action] || action.toUpperCase();
             try {
-                document.getElementById('motorLastCmd').textContent = action.toUpperCase();
-                showToast(`Sending motor action: ${action.toUpperCase()}...`);
+                document.getElementById('motorLastCmd').textContent = label;
+                showToast(`Sending motor action: ${label}...`);
                 await sendCommand({ action });
-                showToast(`Motor command sent: ${action.toUpperCase()}`, 'success');
+                showToast(`Motor command sent: ${label}`, 'success');
             } catch (e) {
                 showToast(`Motor action failed: ${e.message}`, 'error');
             }
