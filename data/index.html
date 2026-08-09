@@ -799,13 +799,24 @@
                 </div>
                 <div class="status-grid">
                     <div class="status-box">
-                        <label>Max Safe</label>
-                        <span>900.0</span>
+                        <label>Pulses / Window</label>
+                        <span id="flowPulses">--</span>
                     </div>
                     <div class="status-box">
                         <label>Flow Status</label>
                         <span id="flowStatus">--</span>
                     </div>
+                    <div class="status-box">
+                        <label>Total Volume</label>
+                        <span id="flowTotal">--</span>
+                    </div>
+                    <div class="status-box">
+                        <label>Pulses Total</label>
+                        <span id="flowTotalPulses">--</span>
+                    </div>
+                </div>
+                <div style="margin-top: 10px; font-size: 0.72rem; color: var(--text-muted);">
+                    Sensor is in the overflow / drain line. Any flow here stops the pump.
                 </div>
             </div>
 
@@ -850,6 +861,14 @@
                         <label>Relay Power</label>
                         <span id="pumpState">OFF</span>
                     </div>
+                </div>
+                <div id="pumpFaultBox"
+                    style="display: none; margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: rgba(255, 61, 113, 0.12); border: 1px solid rgba(255, 61, 113, 0.35); font-size: 0.78rem; color: #ff94b2;">
+                    <strong>⚠️ Overflow interlock active.</strong> Water is flowing through the drain line, so the pump
+                    is held off in Auto mode. Manual ON still works and will override this.
+                </div>
+                <div class="control-btns" style="grid-template-columns: 1fr; margin-top: 10px; margin-bottom: 0;">
+                    <button class="btn btn-neutral" onclick="clearPumpFault()">Clear Overflow Fault</button>
                 </div>
             </div>
 
@@ -959,6 +978,10 @@
         let heightChart = null;
         let waterChart = null;
         let lastFetchTime = 0;
+        // The pump mode the operator last asked for but the device has not confirmed
+        // yet. Cleared as soon as /live reports the matching mode, or after a timeout.
+        let pendingPumpMode = null;
+        let pendingPumpTimer = null;
 
         const firebaseApp = firebase.apps.length ? firebase.apps[0] : firebase.initializeApp(window.firebaseConfig);
         const firebaseDb = firebase.database(firebaseApp);
@@ -1206,14 +1229,47 @@
             soilBadge.textContent = isWet ? 'Moist' : 'Dry';
             document.getElementById('soilState').textContent = isWet ? 'Wet (Optimal)' : 'Dry (Watering Needed)';
 
-            // Flow Rate
-            const flowVal = Number.parseFloat(data.flowValue ?? 0);
-            document.getElementById('flowValue').textContent = flowVal.toFixed(1);
-            const isSafeFlow = flowVal <= 900;
+            // Flow Rate.
+            // Distinguish "the device never sent a flow field" (firmware too old, or
+            // the payload was truncated) from "the sensor genuinely read zero". The
+            // old code coalesced a missing field to 0 and rendered 0.0, which looked
+            // identical to a working-but-idle sensor and hid the real problem.
+            const hasFlow = data.flowValue !== undefined && data.flowValue !== null &&
+                Number.isFinite(Number.parseFloat(data.flowValue));
+            const flowVal = hasFlow ? Number.parseFloat(data.flowValue) : null;
+            document.getElementById('flowValue').textContent = hasFlow ? flowVal.toFixed(1) : '--';
+
+            const pulses = data.flowPulses;
+            const windowMs = data.flowWindowMs;
+            document.getElementById('flowPulses').textContent =
+                (pulses === undefined || pulses === null) ? '--'
+                    : `${pulses}${windowMs ? ' / ' + (windowMs / 1000).toFixed(1) + 's' : ''}`;
+
+            const totalMl = Number(data.flowTotalMl);
+            document.getElementById('flowTotal').textContent =
+                Number.isFinite(totalMl) ? (totalMl >= 1000 ? `${(totalMl / 1000).toFixed(2)} L` : `${totalMl.toFixed(0)} ml`) : '--';
+            document.getElementById('flowTotalPulses').textContent = data.flowTotalPulses ?? '--';
+
+            const flowFault = data.flowFault === true || data.flowFault === 'true';
             const flowBadge = document.getElementById('flowSafetyBadge');
-            flowBadge.className = 'stage-badge ' + (isSafeFlow ? 'stage-germination' : 'stage-harvest');
-            flowBadge.textContent = isSafeFlow ? 'Normal Flow' : '⚠️ High Flow';
-            document.getElementById('flowStatus').textContent = isSafeFlow ? '✓ Safe' : '⚠️ Warning';
+            const flowStatusEl = document.getElementById('flowStatus');
+            if (!hasFlow) {
+                flowBadge.className = 'stage-badge stage-unknown';
+                flowBadge.textContent = 'No Data';
+                flowStatusEl.textContent = '-- No Data';
+            } else if (flowFault) {
+                flowBadge.className = 'stage-badge stage-harvest';
+                flowBadge.textContent = '⚠️ Draining';
+                flowStatusEl.textContent = '⚠️ Overflow';
+            } else if (flowVal > 900) {
+                flowBadge.className = 'stage-badge stage-harvest';
+                flowBadge.textContent = '⚠️ High Flow';
+                flowStatusEl.textContent = '⚠️ Warning';
+            } else {
+                flowBadge.className = 'stage-badge stage-germination';
+                flowBadge.textContent = 'No Drain Flow';
+                flowStatusEl.textContent = '✓ Safe';
+            }
 
             // Environmental Metrics
             document.getElementById('tempVal').textContent = data.temperature ? `${data.temperature} °C` : '-- °C';
@@ -1231,7 +1287,14 @@
             const pumpPill = document.getElementById('pumpStatePill');
             pumpPill.className = 'stage-badge ' + (currentState === 'ON' ? 'stage-germination' : 'stage-unknown');
             pumpPill.textContent = `PUMP ${currentState}`;
-            updateModeButtons(currentMode);
+            document.getElementById('pumpFaultBox').style.display = flowFault ? 'block' : 'none';
+            // Only re-sync the toggle from device state once the device has actually
+            // acknowledged the mode we last sent. Otherwise the 2 s /live push keeps
+            // snapping the highlight back to the old mode and the buttons feel dead.
+            if (!pendingPumpMode || pendingPumpMode === currentMode) {
+                pendingPumpMode = null;
+                updateModeButtons(currentMode);
+            }
 
             // Motor Status
             const motorSt = data.motorStatus || 'OFF';
@@ -1257,6 +1320,7 @@
                     : mode === 'ManualOff' ? 'mister_off' : 'mister_auto';
             }
             if (mode && !action) {
+                if (mode === 'ClearFault') return 'pump_fault_clear';
                 return mode === 'ManualOn' ? 'pump_on' : mode === 'ManualOff' ? 'pump_off' : 'pump_auto';
             }
             if (action === 'on') return 'motor_on';
@@ -1299,11 +1363,33 @@
         async function setMode(mode) {
             try {
                 showToast(`Setting pump mode to ${mode}...`);
-                await sendCommand({ mode });
+                pendingPumpMode = mode;
                 updateModeButtons(mode);
+                if (pendingPumpTimer) clearTimeout(pendingPumpTimer);
+                // In cloud mode the device polls /commands every 5 s, so give it a
+                // generous window before deciding the command was lost and letting the
+                // toggle fall back to whatever the device actually reports.
+                pendingPumpTimer = setTimeout(() => {
+                    if (pendingPumpMode === mode) {
+                        pendingPumpMode = null;
+                        showToast('Device has not confirmed the pump mode yet.', 'error');
+                    }
+                }, 15000);
+                await sendCommand({ mode });
                 showToast(`Pump command sent: ${mode}`, 'success');
             } catch (e) {
+                pendingPumpMode = null;
                 showToast(`Error updating mode: ${e.message}`, 'error');
+            }
+        }
+
+        async function clearPumpFault() {
+            try {
+                showToast('Clearing overflow interlock...');
+                await sendCommand({ mode: 'ClearFault' });
+                showToast('Overflow interlock cleared', 'success');
+            } catch (e) {
+                showToast(`Could not clear fault: ${e.message}`, 'error');
             }
         }
 
