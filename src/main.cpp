@@ -1204,10 +1204,12 @@ void handleRoot()
           document.getElementById('height').textContent = data.distance > 0 ? data.distance : '--';
           document.getElementById('soilValue').textContent = data.soilValue;
           document.getElementById('soilStatus').textContent = data.soilValue > 2000 ? 'Wet' : 'Dry';
-          document.getElementById('flowValue').textContent = parseFloat(data.flowValue).toFixed(1);
-          document.getElementById('flowStatus').textContent = data.flowValue > 900 ? '⚠️ High' : '✓ OK';
-          document.getElementById('pumpMode').textContent = data.pumpMode;
-          document.getElementById('pumpState').textContent = data.pumpState;
+          const fv = (data.flowValue !== null && data.flowValue !== undefined) ? parseFloat(data.flowValue) : NaN;
+          document.getElementById('flowValue').textContent = isNaN(fv) ? '--' : fv.toFixed(1);
+          document.getElementById('flowStatus').textContent = isNaN(fv) ? '--' : (fv > 900 ? '⚠️ High' : '✓ OK');
+          const pumpModeNorm = String(data.pumpMode || '').replace(/\s+/g, '') || 'Auto';
+          document.getElementById('pumpMode').textContent = data.pumpMode || 'Auto';
+          document.getElementById('pumpState').textContent = data.pumpState || 'OFF';
           document.getElementById('motorStatus').textContent = data.motorStatus || 'OFF';
           
           // Update fan mode and mister mode displays
@@ -1215,9 +1217,12 @@ void handleRoot()
           document.getElementById('misterMode').textContent = data.misterMode || 'Auto';
           document.getElementById('germinationStatus').textContent = data.daysSinceGermination > 0 ? 'Active (' + data.daysSinceGermination + ' days)' : 'Not Started';
 
-          // Update temperature and humidity
-          document.getElementById('temperature').textContent = parseFloat(data.temperature).toFixed(1);
-          document.getElementById('humidity').textContent = parseFloat(data.humidity).toFixed(1);
+          // Update temperature and humidity. A failed DHT read arrives as JSON
+          // null, and parseFloat(null) is NaN, so guard before formatting.
+          const tv = (data.temperature !== null && data.temperature !== undefined) ? parseFloat(data.temperature) : NaN;
+          document.getElementById('temperature').textContent = isNaN(tv) ? '--' : tv.toFixed(1);
+          const hv = (data.humidity !== null && data.humidity !== undefined) ? parseFloat(data.humidity) : NaN;
+          document.getElementById('humidity').textContent = isNaN(hv) ? '--' : hv.toFixed(1);
 
           // Update float switch status
           const floatStatusSpan = document.getElementById('floatSwitchStatus');
@@ -1285,7 +1290,7 @@ void handleRoot()
           badge.textContent = data.growthStage;
           badge.classList.add('stage-' + data.growthStage.toLowerCase());
 
-          updateModeButtons(data.pumpMode);
+          updateModeButtons(pumpModeNorm);
         })
         .catch(e => console.error(e));
     }
