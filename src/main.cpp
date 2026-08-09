@@ -39,8 +39,24 @@
 #define MOTOR_RUN_TIME 12000 // 12 seconds
 // Soil threshold (wet when > value)
 #define SOIL_THRESHOLD 2000
-// Flow threshold (ml/min) – above this stops the pump
+// Flow threshold (ml/min) – legacy "high flow" warning level shown on the dashboard.
 #define FLOW_THRESHOLD 900.0
+// The YF-S201 sits in the OVERFLOW / DRAIN line, so any sustained flow there means
+// the tray is dumping water and the irrigation pump must stop. This is far lower
+// than FLOW_THRESHOLD: we are detecting "is water moving at all", not "is it fast".
+// One pulse per sample window at PULSES_PER_LITER=450 over 1s is ~133 ml/min, so
+// 60 ml/min reliably catches a real trickle while ignoring a single stray edge.
+#define FLOW_DETECT_ML_MIN 60.0
+// A drain-line fault clears itself once flow has been absent for this long. Without
+// the delay the pump would chatter on/off as the last of the water drained away.
+#define FLOW_FAULT_CLEAR_MS 8000
+// Flow is integrated over a window of at least this long. The window is measured,
+// not assumed — see the flow section of loop().
+#define FLOW_SAMPLE_MS 1000
+// Minimum spacing between two accepted flow pulses (microseconds). A YF-S201 at its
+// rated 30 L/min produces ~225 Hz (4.4 ms period), so 400 us rejects contact bounce
+// and relay-switching EMI without ever dropping a real pulse.
+#define FLOW_MIN_PULSE_US 400
 // Growth stage thresholds (distance in cm)
 #define GERMINATION_DISTANCE 25 // < 25cm = germination stage
 #define GROWTH_DISTANCE 15      // 15-25cm = growth stage
@@ -139,10 +155,22 @@ unsigned long motorStartTime = 0;
 bool motorManualMode = false; // manual override
 
 // Flow sensor
-volatile int pulseCount = 0;    // pulses counted in the current interval
-float flow_ml_min = 0.0;        // last computed flow rate (ml/min)
-unsigned long lastFlowTime = 0; // last time flow was computed
-bool lastPumpWasOn = false;     // detect pump state change
+volatile unsigned long pulseCount = 0;     // pulses counted in the current window
+volatile unsigned long lastPulseMicros = 0; // for the ISR glitch filter
+float flow_ml_min = 0.0;                   // last computed flow rate (ml/min)
+unsigned long flowPulsesLastWindow = 0;    // raw pulses in the last window (sensor liveness)
+unsigned long flowWindowMs = 0;            // measured length of that window
+unsigned long flowTotalPulses = 0;         // pulses since boot
+float flowTotalMl = 0.0;                   // integrated volume since boot
+unsigned long lastFlowTime = 0;            // start of the current measurement window
+bool lastPumpWasOn = false;                // detect pump state change
+
+// Overflow safety. The flow sensor is plumbed into the drain line, so flow there
+// is a fault condition, not normal operation. The fault latches so a brief burst
+// still stops the pump, and clears on its own once the line has been dry for
+// FLOW_FAULT_CLEAR_MS (or immediately via the pump_fault_clear command).
+bool pumpFlowFault = false;
+unsigned long lastFlowSeenTime = 0;
 
 // Plant growth stage
 String growthStage = "Unknown";
@@ -261,9 +289,33 @@ String readFloatSwitchEvents()
 }
 
 // ==================== Interrupt Service Routine ====================
+// Called on every rising edge of the flow sensor. The glitch filter matters here:
+// the fan, mister and pump relays all switch inductive loads on the same board and
+// the coupled transient was being counted as flow, which (via the pump safety
+// interlock) could hold the pump off with no water anywhere near the sensor.
 void IRAM_ATTR countPulse()
 {
-  pulseCount++; // called on every rising edge of the flow sensor
+  unsigned long nowUs = micros();
+  if (nowUs - lastPulseMicros < FLOW_MIN_PULSE_US)
+  {
+    return; // too close to the previous edge to be a real turbine pulse
+  }
+  lastPulseMicros = nowUs;
+  pulseCount++;
+}
+
+// ==================== JSON Number Formatting ====================
+// dtostrf() right-justifies into a minimum field width, so dtostrf(v, 5, 1, buf)
+// yields "  0.0" — two leading spaces that then get spliced straight into the JSON
+// payload. Passing width 0 disables the padding and gives a clean bare number.
+static void jsonFloat(float value, char *out, size_t outSize, int decimals)
+{
+  if (isnan(value) || isinf(value))
+  {
+    snprintf(out, outSize, "0");
+    return;
+  }
+  dtostrf(value, 0, decimals, out);
 }
 
 // ==================== Distance Measurement ====================
@@ -617,9 +669,9 @@ void firebasePushHistory()
     return;
 
   char flowStr[16], tempStr[16], humStr[16];
-  dtostrf(flow_ml_min, 5, 2, flowStr);
-  dtostrf(temperature, 5, 2, tempStr);
-  dtostrf(humidity, 5, 2, humStr);
+  jsonFloat(flow_ml_min, flowStr, sizeof(flowStr), 2);
+  jsonFloat(temperature, tempStr, sizeof(tempStr), 2);
+  jsonFloat(humidity, humStr, sizeof(humStr), 2);
 
   // Firebase Realtime Database accepts a JSON object and creates a push key when POST is used.
   char body[320];
@@ -653,10 +705,11 @@ void firebasePublishLive()
   if (WiFi.status() != WL_CONNECTED)
     return;
 
-  char flowStr[16], tempStr[16], humStr[16];
-  dtostrf(flow_ml_min, 5, 1, flowStr);
-  dtostrf(temperature, 5, 1, tempStr);
-  dtostrf(humidity, 5, 1, humStr);
+  char flowStr[16], tempStr[16], humStr[16], flowTotalStr[16];
+  jsonFloat(flow_ml_min, flowStr, sizeof(flowStr), 1);
+  jsonFloat(temperature, tempStr, sizeof(tempStr), 1);
+  jsonFloat(humidity, humStr, sizeof(humStr), 1);
+  jsonFloat(flowTotalMl, flowTotalStr, sizeof(flowTotalStr), 0);
 
   String pumpModeLabel = getPumpModeLabel();
   String pumpStateLabel = getPumpState();
@@ -667,13 +720,18 @@ void firebasePublishLive()
   String wifiMode = (WiFi.getMode() == WIFI_AP) ? "AP" : (WiFi.getMode() == WIFI_STA) ? "STA"
                                                                                       : "OFF";
 
-  char body[1500];
+  char body[1800];
   snprintf(body, sizeof(body),
-           "{\"distance\":%ld,\"growthStage\":\"%s\",\"soilValue\":%d,\"flowValue\":%s,\"pumpMode\":\"%s\",\"pumpState\":\"%s\",\"motorStatus\":\"%s\",\"temperature\":%s,\"humidity\":%s,\"floatSwitch\":%s,\"fansActive\":%s,\"fanMode\":\"%s\",\"misterActive\":%s,\"misterMode\":\"%s\",\"daysSinceGermination\":%lu,\"wifiConnected\":%s,\"wifiMode\":\"%s\",\"deviceIp\":\"%s\",\"connectionStatus\":\"%s\",\"ts\":%llu}",
+           "{\"distance\":%ld,\"growthStage\":\"%s\",\"soilValue\":%d,\"flowValue\":%s,\"flowPulses\":%lu,\"flowWindowMs\":%lu,\"flowTotalPulses\":%lu,\"flowTotalMl\":%s,\"flowFault\":%s,\"pumpMode\":\"%s\",\"pumpState\":\"%s\",\"motorStatus\":\"%s\",\"temperature\":%s,\"humidity\":%s,\"floatSwitch\":%s,\"fansActive\":%s,\"fanMode\":\"%s\",\"misterActive\":%s,\"misterMode\":\"%s\",\"daysSinceGermination\":%lu,\"wifiConnected\":%s,\"wifiMode\":\"%s\",\"deviceIp\":\"%s\",\"connectionStatus\":\"%s\",\"ts\":%llu}",
            currentHeight,
            growthStage.c_str(),
            analogRead(SOIL_PIN),
            flowStr,
+           flowPulsesLastWindow,
+           flowWindowMs,
+           flowTotalPulses,
+           flowTotalStr,
+           pumpFlowFault ? "true" : "false",
            pumpModeLabel.c_str(),
            pumpStateLabel.c_str(),
            motorRunning ? "ON" : "OFF",
@@ -789,6 +847,14 @@ void executeCloudCommand(const String &action)
   else if (action == "pump_off" || action == "ManualOff")
   {
     pumpMode = "ManualOff";
+  }
+  else if (action == "pump_fault_clear" || action == "flow_reset")
+  {
+    // Operator has confirmed the overflow is dealt with. Clearing the latch lets
+    // Auto mode resume immediately instead of waiting out FLOW_FAULT_CLEAR_MS.
+    pumpFlowFault = false;
+    lastFlowSeenTime = 0;
+    Serial.println("[Firebase] Drain-flow interlock cleared by operator");
   }
   else if (action == "fan_on")
   {
@@ -1339,11 +1405,13 @@ void handleRoot()
 void handleStatus()
 {
   char flowStr[16];
-  dtostrf(flow_ml_min, 5, 1, flowStr);
+  jsonFloat(flow_ml_min, flowStr, sizeof(flowStr), 1);
   char tempStr[16];
-  dtostrf(temperature, 5, 1, tempStr);
+  jsonFloat(temperature, tempStr, sizeof(tempStr), 1);
   char humStr[16];
-  dtostrf(humidity, 5, 1, humStr);
+  jsonFloat(humidity, humStr, sizeof(humStr), 1);
+  char flowTotalStr[16];
+  jsonFloat(flowTotalMl, flowTotalStr, sizeof(flowTotalStr), 0);
 
   String pumpModeLabel = getPumpModeLabel();
   String pumpStateLabel = getPumpState();
@@ -1355,13 +1423,18 @@ void handleStatus()
   String wifiMode = (WiFi.getMode() == WIFI_AP) ? "AP" : (WiFi.getMode() == WIFI_STA) ? "STA"
                                                                                       : "OFF";
 
-  char buffer[1400];
+  char buffer[1800];
   snprintf(buffer, sizeof(buffer),
-           "{\"distance\":%ld,\"growthStage\":\"%s\",\"soilValue\":%d,\"flowValue\":%s,\"pumpMode\":\"%s\",\"pumpState\":\"%s\",\"motorStatus\":\"%s\",\"temperature\":%s,\"humidity\":%s,\"floatSwitch\":%s,\"fansActive\":%s,\"fanMode\":\"%s\",\"misterActive\":%s,\"misterMode\":\"%s\",\"daysSinceGermination\":%lu,\"wifiConnected\":%s,\"wifiMode\":\"%s\",\"deviceIp\":\"%s\",\"connectionStatus\":\"%s\"}",
+           "{\"distance\":%ld,\"growthStage\":\"%s\",\"soilValue\":%d,\"flowValue\":%s,\"flowPulses\":%lu,\"flowWindowMs\":%lu,\"flowTotalPulses\":%lu,\"flowTotalMl\":%s,\"flowFault\":%s,\"pumpMode\":\"%s\",\"pumpState\":\"%s\",\"motorStatus\":\"%s\",\"temperature\":%s,\"humidity\":%s,\"floatSwitch\":%s,\"fansActive\":%s,\"fanMode\":\"%s\",\"misterActive\":%s,\"misterMode\":\"%s\",\"daysSinceGermination\":%lu,\"wifiConnected\":%s,\"wifiMode\":\"%s\",\"deviceIp\":\"%s\",\"connectionStatus\":\"%s\"}",
            currentHeight,
            growthStage.c_str(),
            analogRead(SOIL_PIN),
            flowStr,
+           flowPulsesLastWindow,
+           flowWindowMs,
+           flowTotalPulses,
+           flowTotalStr,
+           pumpFlowFault ? "true" : "false",
            pumpModeLabel.c_str(),
            pumpStateLabel.c_str(),
            motorRunning ? "ON" : "OFF",
@@ -1408,6 +1481,13 @@ void handleControl()
   if (mode == "Auto" || mode == "ManualOn" || mode == "ManualOff")
   {
     pumpMode = mode;
+    server.send(200, "text/plain", "OK");
+  }
+  else if (mode == "ClearFault")
+  {
+    pumpFlowFault = false;
+    lastFlowSeenTime = 0;
+    Serial.println("Drain-flow interlock cleared by operator (LAN)");
     server.send(200, "text/plain", "OK");
   }
   else
@@ -2021,19 +2101,56 @@ void loop()
       stopMisterNow("germination period ended or curtain open");
     }
   }
-  if (millis() - lastFlowTime >= 1000)
+  // ----- Flow rate -----
+  // The window length is MEASURED, never assumed. loop() does not run at a fixed
+  // rate: readDistanceCM() blocks for up to 50 ms, and each Firebase HTTPS call has
+  // an 8 s timeout, so a single iteration can span several seconds. The old code
+  // divided every pulse count by a hard-coded 1 s regardless, which under-reported
+  // the rate by exactly the factor the loop had overrun by — routinely enough to
+  // round a real trickle down to 0.0 and make the dashboard look like it had no
+  // flow data at all.
+  unsigned long flowNow = millis();
+  unsigned long flowElapsed = flowNow - lastFlowTime;
+  if (flowElapsed >= FLOW_SAMPLE_MS)
   {
     noInterrupts();
-    int pulses = pulseCount;
+    unsigned long pulses = pulseCount;
     pulseCount = 0;
     interrupts();
 
-    float flowRate_L_min = (float)pulses / PULSES_PER_LITER * 60.0;
-    flow_ml_min = flowRate_L_min * 1000.0;
-    lastFlowTime = millis();
+    float litres = (float)pulses / PULSES_PER_LITER;
+    flow_ml_min = litres * 1000.0f * (60000.0f / (float)flowElapsed);
+    flowPulsesLastWindow = pulses;
+    flowWindowMs = flowElapsed;
+    flowTotalPulses += pulses;
+    flowTotalMl += litres * 1000.0f;
+    lastFlowTime = flowNow;
 
     // store for throttled serial output
     lastFlowMlMin = flow_ml_min;
+  }
+
+  // ----- Overflow detection (drain-line flow sensor) -----
+  // The sensor is in the overflow/drain line, so ANY sustained flow means water is
+  // leaving the tray and the irrigation pump should stop. The fault latches on
+  // detection and self-clears only after the line has been dry for a while, which
+  // stops the pump chattering as residual water finishes draining.
+  if (flow_ml_min >= FLOW_DETECT_ML_MIN)
+  {
+    lastFlowSeenTime = millis();
+    if (!pumpFlowFault)
+    {
+      pumpFlowFault = true;
+      Serial.print("SAFETY: Drain flow detected (");
+      Serial.print(flow_ml_min, 1);
+      Serial.println(" ml/min) - irrigation pump interlocked OFF");
+      firebasePushWaterEvent("overflow_detected", "Drain flow detected; pump interlocked off");
+    }
+  }
+  else if (pumpFlowFault && (millis() - lastFlowSeenTime >= FLOW_FAULT_CLEAR_MS))
+  {
+    pumpFlowFault = false;
+    Serial.println("SAFETY: Drain line dry - pump interlock cleared");
   }
 
   // ----- 4. Soil moisture reading -----
@@ -2041,26 +2158,48 @@ void loop()
   lastSoilValue = soilValue;
 
   // ----- 5. Pump control logic -----
-  bool flowSafety = flow_ml_min > FLOW_THRESHOLD;
-  if (flowSafety)
+  // Priority order matters, and it is deliberately NOT the order it used to be.
+  // Previously the flow interlock was tested first and unconditionally drove the
+  // relay HIGH, so pumpMode was consulted only when no flow was present. A noisy
+  // or miswired flow input therefore pinned the pump off permanently and every
+  // dashboard button appeared dead — the command was received and pumpMode really
+  // did change, it just never reached the relay.
+  //
+  // Manual now outranks the interlock, per the operating requirement that the pump
+  // stay controllable by hand. The interlock still governs Auto.
+  //   1. Manual On  -> pump ON  (explicit operator intent overrides the interlock)
+  //   2. Manual Off -> pump OFF
+  //   3. Auto       -> OFF while the drain-flow fault is latched,
+  //                    otherwise soil-moisture driven as before.
+  if (pumpMode == "ManualOn")
   {
-    digitalWrite(RELAY_PIN, HIGH);
-  }
-  else if (pumpMode == "ManualOn")
-  {
-    digitalWrite(RELAY_PIN, LOW);
+    digitalWrite(RELAY_PIN, LOW); // ON
+    static bool warnedOverride = false;
+    if (pumpFlowFault && !warnedOverride)
+    {
+      Serial.println("WARNING: Manual On is overriding the drain-flow interlock");
+      warnedOverride = true;
+    }
+    else if (!pumpFlowFault)
+    {
+      warnedOverride = false;
+    }
   }
   else if (pumpMode == "ManualOff")
   {
-    digitalWrite(RELAY_PIN, HIGH);
+    digitalWrite(RELAY_PIN, HIGH); // OFF
+  }
+  else if (pumpFlowFault)
+  {
+    digitalWrite(RELAY_PIN, HIGH); // OFF - water is draining, do not add more
   }
   else if (soilValue > SOIL_THRESHOLD)
   {
-    digitalWrite(RELAY_PIN, LOW);
+    digitalWrite(RELAY_PIN, LOW); // ON
   }
   else
   {
-    digitalWrite(RELAY_PIN, HIGH);
+    digitalWrite(RELAY_PIN, HIGH); // OFF
   }
 
   // update cached pump state and log water events
@@ -2083,7 +2222,15 @@ void loop()
     lastSerialTime = millis();
     Serial.print("Flow: ");
     Serial.print(lastFlowMlMin, 1);
-    Serial.print(" ml/min | Soil: ");
+    Serial.print(" ml/min (");
+    Serial.print(flowPulsesLastWindow);
+    Serial.print(" pulses / ");
+    Serial.print(flowWindowMs);
+    Serial.print(" ms, total ");
+    Serial.print(flowTotalPulses);
+    Serial.print(") | Interlock: ");
+    Serial.print(pumpFlowFault ? "FAULT" : "clear");
+    Serial.print(" | Soil: ");
     Serial.print(lastSoilValue);
     Serial.print(" | Distance: ");
     if (lastDistance > 0)
