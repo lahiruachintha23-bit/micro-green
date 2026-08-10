@@ -82,7 +82,7 @@ const char *AP_PASSWORD = "microgreen123";
 // Published in /live so the dashboard can tell a stale flash from a wiring fault:
 // if the board is publishing but this is behind, the fix is `pio run -t upload`,
 // not more debugging of the browser.
-#define FIRMWARE_VERSION "2026.08.10-motor8s-exact"
+#define FIRMWARE_VERSION "2026.08.10-motor-cmdpoll"
 
 // ==================== Firebase Realtime Database Configuration ====================
 // ESP32 pushes telemetry to Firebase and polls for pending commands.
@@ -2138,39 +2138,42 @@ void loop()
   //   /commands  GET every 5s   -> pull + execute + DELETE queued commands
   //   heartbeat  PUT every 30s  -> single-node liveness (/deviceStatus)
   //   /history   POST every 5m  -> append a sample for the charts
-  // Network I/O is DEFERRED while the tray is moving. Each call below can block for
-  // up to its 8 s HTTPS timeout, and nothing can interrupt it once started - so a
-  // publish that begins at t=7.9s carries an 8 s run past 15 s. Checking the cutoff
-  // after the call cannot fix that; the overrun happens *inside* it. Skipping the
-  // block keeps an iteration near ~150 ms during a run, which lands the stop within
-  // ~100 ms of 8 s. The cost is at most 8 s of stale telemetry, and the intervals
-  // below are catch-up (>=), so the next iteration publishes immediately.
-  if (WiFi.status() == WL_CONNECTED && !motorRunning)
+  // Only the PUBLISH side is deferred while the tray moves. Each call can block for
+  // up to its 8 s HTTPS timeout and nothing interrupts it once started, so a publish
+  // beginning at t=7.9s would carry an 8 s run past 15 s. Checking the cutoff after
+  // the call cannot fix that - the overrun happens *inside* it.
+  //
+  // The COMMAND POLL is deliberately NOT gated on !motorRunning. Gating it deadlocks
+  // the tray: a run keeps the poll from executing, so a Stop pressed mid-run is never
+  // read, and worse, back-to-back Raise/Lower presses queue up in /commands and only
+  // drain once the run ends. Polling costs one round trip and can only ever shorten
+  // a run (Stop), never extend it past the cutoff serviced immediately after.
+  if (WiFi.status() == WL_CONNECTED)
   {
     unsigned long now = millis();
 
-    if (now - lastLivePublishTime >= LIVE_PUBLISH_INTERVAL)
+    if (!motorRunning && now - lastLivePublishTime >= LIVE_PUBLISH_INTERVAL)
     {
       lastLivePublishTime = now;
       firebasePublishLive();
-      motorServiceTimeout(); // an 8 s HTTPS timeout must not extend an 8 s run
+      motorServiceTimeout();
     }
 
     if (now - lastCommandPollTime >= COMMAND_POLL_INTERVAL)
     {
       lastCommandPollTime = now;
       firebasePollCommands();
-      motorServiceTimeout();
+      motorServiceTimeout(); // a Stop read here takes effect immediately
     }
 
-    if (now - lastHeartbeatTime >= HEARTBEAT_INTERVAL)
+    if (!motorRunning && now - lastHeartbeatTime >= HEARTBEAT_INTERVAL)
     {
       lastHeartbeatTime = now;
       updateFirebaseHeartbeat();
       motorServiceTimeout();
     }
 
-    if (now - lastHistoryPushTime >= HISTORY_PUSH_INTERVAL)
+    if (!motorRunning && now - lastHistoryPushTime >= HISTORY_PUSH_INTERVAL)
     {
       lastHistoryPushTime = now;
       firebasePushHistory();
