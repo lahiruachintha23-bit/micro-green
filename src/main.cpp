@@ -82,7 +82,7 @@ const char *AP_PASSWORD = "microgreen123";
 // Published in /live so the dashboard can tell a stale flash from a wiring fault:
 // if the board is publishing but this is behind, the fix is `pio run -t upload`,
 // not more debugging of the browser.
-#define FIRMWARE_VERSION "2026.08.10-motor8s"
+#define FIRMWARE_VERSION "2026.08.10-motor8s-exact"
 
 // ==================== Firebase Realtime Database Configuration ====================
 // ESP32 pushes telemetry to Firebase and polls for pending commands.
@@ -354,6 +354,33 @@ const char *motorStatusLabel()
   if (!motorRunning)
     return "OFF";
   return motorDirection > 0 ? "RAISING" : "LOWERING";
+}
+
+// Cuts the run at MOTOR_RUN_TIME. This is deliberately callable from anywhere
+// and must be invoked after every blocking operation in loop(), not just once
+// per iteration: a single iteration can span many seconds (readDistanceCM()
+// blocks up to 50 ms, and each of the four Firebase HTTPS calls has an 8 s
+// timeout), so a once-per-loop check let an 8 s run stretch to 20 s+ whenever
+// the network was slow. Cheap and idempotent - it no-ops unless a run is
+// actually due to stop.
+void motorServiceTimeout()
+{
+  if (!motorRunning || (millis() - motorStartTime < MOTOR_RUN_TIME))
+    return;
+
+  motorStop();
+  motorTriggered = true;
+  Serial.println("Motor OFF");
+
+  // First-ever motor run doubles as the germination marker. saveGerminationTime()
+  // writes SPIFFS, so it runs strictly AFTER motorStop() has already dropped the
+  // H-bridge pins - the flash write must never extend the run.
+  if (germinationStartTime == 0)
+  {
+    germinationStartTime = millis();
+    saveGerminationTime(germinationStartTime);
+    Serial.println("Germination event detected");
+  }
 }
 
 // ==================== Distance Measurement ====================
@@ -1857,6 +1884,7 @@ void loop()
 {
   // ----- 1. Ultrasonic distance measurement -----
   long distance = readDistanceCM();
+  motorServiceTimeout(); // pulseInLong() blocks up to 50 ms; keep the cutoff current
   if (distance > 0)
   {
     currentHeight = distance;
@@ -1881,20 +1909,7 @@ void loop()
   // disabled: the tray moves solely on an explicit up/down command from the
   // dashboard (cloud) or the LAN /motor endpoint.
 
-  if (motorRunning && (millis() - motorStartTime >= MOTOR_RUN_TIME))
-  {
-    motorStop();
-    motorTriggered = true;
-    Serial.println("Motor OFF");
-
-    // Save germination time on first motor trigger
-    if (germinationStartTime == 0)
-    {
-      germinationStartTime = millis();
-      saveGerminationTime(germinationStartTime);
-      Serial.println("Germination event detected");
-    }
-  }
+  motorServiceTimeout();
 
   // ----- 3. AM2301 Temperature and Humidity Reading -----
   if (millis() - lastDHTReadTime >= DHT_READ_INTERVAL)
@@ -2123,7 +2138,14 @@ void loop()
   //   /commands  GET every 5s   -> pull + execute + DELETE queued commands
   //   heartbeat  PUT every 30s  -> single-node liveness (/deviceStatus)
   //   /history   POST every 5m  -> append a sample for the charts
-  if (WiFi.status() == WL_CONNECTED)
+  // Network I/O is DEFERRED while the tray is moving. Each call below can block for
+  // up to its 8 s HTTPS timeout, and nothing can interrupt it once started - so a
+  // publish that begins at t=7.9s carries an 8 s run past 15 s. Checking the cutoff
+  // after the call cannot fix that; the overrun happens *inside* it. Skipping the
+  // block keeps an iteration near ~150 ms during a run, which lands the stop within
+  // ~100 ms of 8 s. The cost is at most 8 s of stale telemetry, and the intervals
+  // below are catch-up (>=), so the next iteration publishes immediately.
+  if (WiFi.status() == WL_CONNECTED && !motorRunning)
   {
     unsigned long now = millis();
 
@@ -2131,24 +2153,28 @@ void loop()
     {
       lastLivePublishTime = now;
       firebasePublishLive();
+      motorServiceTimeout(); // an 8 s HTTPS timeout must not extend an 8 s run
     }
 
     if (now - lastCommandPollTime >= COMMAND_POLL_INTERVAL)
     {
       lastCommandPollTime = now;
       firebasePollCommands();
+      motorServiceTimeout();
     }
 
     if (now - lastHeartbeatTime >= HEARTBEAT_INTERVAL)
     {
       lastHeartbeatTime = now;
       updateFirebaseHeartbeat();
+      motorServiceTimeout();
     }
 
     if (now - lastHistoryPushTime >= HISTORY_PUSH_INTERVAL)
     {
       lastHistoryPushTime = now;
       firebasePushHistory();
+      motorServiceTimeout();
     }
   }
 
