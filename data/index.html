@@ -947,6 +947,10 @@
                         <span class="diag-label">Device Local IP</span>
                         <span id="diagIp" class="diag-val">--</span>
                     </div>
+                    <div class="diag-row">
+                        <span class="diag-label">Firmware</span>
+                        <span id="diagFw" class="diag-val">--</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1324,6 +1328,9 @@
 
             // Diagnostics
             document.getElementById('diagIp').textContent = data.deviceIp || '192.168.1.xxx';
+            // Missing 'fw' means firmware older than the grow-light build. Say so
+            // plainly: a stale flash looks exactly like a dead relay from here.
+            document.getElementById('diagFw').textContent = data.fw || 'pre-2026.08.10 (reflash)';
         }
 
         // Map a UI intent to the single action string the ESP32 understands.
@@ -1368,10 +1375,20 @@
             if (customTarget) {
                 const url = lanEndpoint(customTarget, body);
                 if (url) {
-                    const res = await fetchWithTimeout(url, { timeout: 3000 });
-                    if (!res.ok) throw new Error(`Device returned ${res.status}`);
-                    pollLan(); // reflect the change immediately
-                    return;
+                    // A saved target that has gone unreachable (device rebooted onto a
+                    // new DHCP lease, phone on mobile data, laptop on another subnet)
+                    // used to swallow the command here: the throw propagated and the
+                    // cloud path was never tried, so every button looked dead while
+                    // Firebase was reachable the whole time. Fall through instead.
+                    try {
+                        const res = await fetchWithTimeout(url, { timeout: 3000 });
+                        if (!res.ok) throw new Error(`Device returned ${res.status}`);
+                        pollLan(); // reflect the change immediately
+                        return;
+                    } catch (e) {
+                        console.warn('LAN command failed, falling back to cloud:', e.message);
+                        showToast('Device not reachable on LAN — sending via cloud', 'error');
+                    }
                 }
             }
             const action = toCommandAction(body);

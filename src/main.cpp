@@ -78,6 +78,12 @@ const char *STA_PASSWORD = SECRET_STA_PASSWORD;
 const char *AP_SSID = "MicrogreenTray_AP";
 const char *AP_PASSWORD = "microgreen123";
 
+// Bumped by hand whenever the command vocabulary or telemetry shape changes.
+// Published in /live so the dashboard can tell a stale flash from a wiring fault:
+// if the board is publishing but this is behind, the fix is `pio run -t upload`,
+// not more debugging of the browser.
+#define FIRMWARE_VERSION "2026.08.10-growlight"
+
 // ==================== Firebase Realtime Database Configuration ====================
 // ESP32 pushes telemetry to Firebase and polls for pending commands.
 // This avoids requiring the cloud to reach the board directly from the private home network.
@@ -730,7 +736,7 @@ void firebasePublishLive()
 
   char body[1800];
   snprintf(body, sizeof(body),
-           "{\"distance\":%ld,\"growthStage\":\"%s\",\"soilValue\":%d,\"flowValue\":%s,\"flowPulses\":%lu,\"flowWindowMs\":%lu,\"flowTotalPulses\":%lu,\"flowTotalMl\":%s,\"flowFault\":%s,\"pumpMode\":\"%s\",\"pumpState\":\"%s\",\"motorStatus\":\"%s\",\"temperature\":%s,\"humidity\":%s,\"floatSwitch\":%s,\"fansActive\":%s,\"fanMode\":\"%s\",\"growLight\":%s,\"daysSinceGermination\":%lu,\"wifiConnected\":%s,\"wifiMode\":\"%s\",\"deviceIp\":\"%s\",\"connectionStatus\":\"%s\",\"ts\":%llu}",
+           "{\"distance\":%ld,\"growthStage\":\"%s\",\"soilValue\":%d,\"flowValue\":%s,\"flowPulses\":%lu,\"flowWindowMs\":%lu,\"flowTotalPulses\":%lu,\"flowTotalMl\":%s,\"flowFault\":%s,\"pumpMode\":\"%s\",\"pumpState\":\"%s\",\"motorStatus\":\"%s\",\"temperature\":%s,\"humidity\":%s,\"floatSwitch\":%s,\"fansActive\":%s,\"fanMode\":\"%s\",\"growLight\":%s,\"daysSinceGermination\":%lu,\"wifiConnected\":%s,\"wifiMode\":\"%s\",\"deviceIp\":\"%s\",\"connectionStatus\":\"%s\",\"fw\":\"%s\",\"ts\":%llu}",
            currentHeight,
            growthStage.c_str(),
            analogRead(SOIL_PIN),
@@ -754,6 +760,7 @@ void firebasePublishLive()
            wifiMode.c_str(),
            WiFi.localIP().toString().c_str(),
            wifiConnected ? "online" : "offline",
+           FIRMWARE_VERSION,
            (unsigned long long)nowMs());
 
   int code = firebasePut("/live", String(body));
@@ -1665,6 +1672,8 @@ void setup()
   Serial.begin(115200);
   delay(1000);
   Serial.println("\n\nSmart Microgreen Tray System Starting...");
+  Serial.print("Firmware: ");
+  Serial.println(FIRMWARE_VERSION);
 
   // Initialize SPIFFS
   if (!SPIFFS.begin(true))
