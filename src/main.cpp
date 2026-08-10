@@ -31,8 +31,8 @@
 #define FAN1_RELAY 16
 #define FAN2_RELAY 17
 #define FAN3_RELAY 19
-// Water mister relay
-#define WATER_MISTER_RELAY 21
+// Grow light relay (was the water mister; same relay channel, active LOW)
+#define GROW_LIGHT_RELAY 21
 
 // ==================== Constants ====================
 // Motor run time (ms)
@@ -68,14 +68,9 @@
 // Temperature and humidity thresholds
 #define TEMP_THRESHOLD 28.0   // °C - turn fans on if temp > this
 #define HUMIDITY_THRESHOLD 60 // % - turn fans on if humidity > this
-// Mister spray duration
-#define MISTER_SPRAY_DURATION 10000 // milliseconds (10 seconds)
-// Hard ceiling on a continuous "Manual On" spray. A mister left on from a phone
-// that then loses signal will otherwise keep running until someone walks to the
-// tray. Raise or remove this if you genuinely want unbounded manual misting.
-#define MISTER_MAX_CONTINUOUS_MS 300000 // 5 minutes
-// Germination period for mister operation
-#define GERMINATION_PERIOD_DAYS 3 // days after first motor trigger
+// The grow light has no run-time ceiling on purpose: a light is meant to stay on
+// for hours, so the old mister spray-duration and max-continuous limits would cut
+// it off mid-photoperiod. It stays in whatever state it was last commanded into.
 
 // WiFi configuration — station credentials live in include/secrets.h (gitignored).
 const char *STA_SSID = SECRET_STA_SSID;
@@ -133,21 +128,13 @@ unsigned long lastFloatSwitchChangeTime = 0;
 // Fan control
 bool fansActive = false;
 
-// Mister control
-bool misterActive = false;
-unsigned long misterSprayStartTime = 0;
-bool misterSprayInProgress = false;
-// True when the current spray is a one-shot that must auto-stop after
-// MISTER_SPRAY_DURATION. False for a continuous "Manual On" spray.
-bool misterSprayTimed = false;
+// Grow light control - manual on/off only, no schedule
+bool growLightOn = false;
 
 // Germination tracking
 unsigned long germinationStartTime = 0; // millis() when motor first triggers
 const char *GERMINATION_FILE = "/germination_time.json";
 
-// Mister schedule state (for tracking if misters should work today)
-bool misterScheduledToday_6am = false;
-bool misterScheduledToday_6pm = false;
 // Motor state
 bool motorTriggered = false; // trigger only once
 bool motorRunning = false;   // currently running
@@ -183,9 +170,6 @@ String pumpMode = "Auto"; // Auto, ManualOn, ManualOff
 
 // Fan control mode
 String fanMode = "Auto"; // Auto, ManualOn, ManualOff
-
-// Mister control mode
-String misterMode = "Auto"; // Auto, ManualOn, ManualOff
 
 // Serial throttling
 const unsigned long SERIAL_INTERVAL = 1000; // ms between status prints
@@ -292,8 +276,8 @@ String readFloatSwitchEvents()
 
 // ==================== Interrupt Service Routine ====================
 // Called on every rising edge of the flow sensor. The glitch filter matters here:
-// the fan, mister and pump relays all switch inductive loads on the same board and
-// the coupled transient was being counted as flow, which (via the pump safety
+// the fan, grow light and pump relays all switch inductive loads on the same board
+// and the coupled transient was being counted as flow, which (via the pump safety
 // interlock) could hold the pump off with no water anywhere near the sensor.
 void IRAM_ATTR countPulse()
 {
@@ -433,39 +417,16 @@ String getFanModeLabel()
   return "Auto";
 }
 
-String getMisterModeLabel()
+// Grow light relay is active LOW, same as the fan and pump channels on this board.
+// Manual only: the light holds whatever state it was last commanded into, so there
+// is no periodic work for it in loop().
+void growLightSet(bool on, const char *reason)
 {
-  if (misterMode == "ManualOn")
-  {
-    return "Manual On";
-  }
-  if (misterMode == "ManualOff")
-  {
-    return "Manual Off";
-  }
-  return "Auto";
-}
-
-// Starts a spray that is guaranteed to stop after MISTER_SPRAY_DURATION.
-// Deliberately does NOT change misterMode: latching the mode to "ManualOn" here
-// used to route the state machine past every branch that could switch the relay
-// back off, so the mister ran until someone sent an explicit stop.
-void startMisterOneShot()
-{
-  digitalWrite(WATER_MISTER_RELAY, LOW); // ON
-  misterSprayInProgress = true;
-  misterSprayTimed = true;
-  misterSprayStartTime = millis();
-  Serial.println("Mister spray START - one-shot, auto-stop armed");
-}
-
-// Immediately stops any spray, timed or continuous.
-void stopMisterNow(const char *reason)
-{
-  digitalWrite(WATER_MISTER_RELAY, HIGH); // OFF
-  misterSprayInProgress = false;
-  misterSprayTimed = false;
-  Serial.print("Mister spray STOP - ");
+  digitalWrite(GROW_LIGHT_RELAY, on ? LOW : HIGH);
+  growLightOn = on;
+  Serial.print("Grow light ");
+  Serial.print(on ? "ON" : "OFF");
+  Serial.print(" - ");
   Serial.println(reason);
 }
 
@@ -763,14 +724,13 @@ void firebasePublishLive()
   String pumpStateLabel = getPumpState();
   unsigned long daysSinceGerm = getDaysSinceGermination();
   String fanModeLabel = getFanModeLabel();
-  String misterModeLabel = getMisterModeLabel();
   bool wifiConnected = WiFi.status() == WL_CONNECTED;
   String wifiMode = (WiFi.getMode() == WIFI_AP) ? "AP" : (WiFi.getMode() == WIFI_STA) ? "STA"
                                                                                       : "OFF";
 
   char body[1800];
   snprintf(body, sizeof(body),
-           "{\"distance\":%ld,\"growthStage\":\"%s\",\"soilValue\":%d,\"flowValue\":%s,\"flowPulses\":%lu,\"flowWindowMs\":%lu,\"flowTotalPulses\":%lu,\"flowTotalMl\":%s,\"flowFault\":%s,\"pumpMode\":\"%s\",\"pumpState\":\"%s\",\"motorStatus\":\"%s\",\"temperature\":%s,\"humidity\":%s,\"floatSwitch\":%s,\"fansActive\":%s,\"fanMode\":\"%s\",\"misterActive\":%s,\"misterMode\":\"%s\",\"daysSinceGermination\":%lu,\"wifiConnected\":%s,\"wifiMode\":\"%s\",\"deviceIp\":\"%s\",\"connectionStatus\":\"%s\",\"ts\":%llu}",
+           "{\"distance\":%ld,\"growthStage\":\"%s\",\"soilValue\":%d,\"flowValue\":%s,\"flowPulses\":%lu,\"flowWindowMs\":%lu,\"flowTotalPulses\":%lu,\"flowTotalMl\":%s,\"flowFault\":%s,\"pumpMode\":\"%s\",\"pumpState\":\"%s\",\"motorStatus\":\"%s\",\"temperature\":%s,\"humidity\":%s,\"floatSwitch\":%s,\"fansActive\":%s,\"fanMode\":\"%s\",\"growLight\":%s,\"daysSinceGermination\":%lu,\"wifiConnected\":%s,\"wifiMode\":\"%s\",\"deviceIp\":\"%s\",\"connectionStatus\":\"%s\",\"ts\":%llu}",
            currentHeight,
            growthStage.c_str(),
            analogRead(SOIL_PIN),
@@ -788,8 +748,7 @@ void firebasePublishLive()
            floatSwitchState ? "true" : "false",
            fansActive ? "true" : "false",
            fanModeLabel.c_str(),
-           misterSprayInProgress ? "true" : "false",
-           misterModeLabel.c_str(),
+           growLightOn ? "true" : "false",
            daysSinceGerm,
            wifiConnected ? "true" : "false",
            wifiMode.c_str(),
@@ -923,18 +882,13 @@ void executeCloudCommand(const String &action)
   {
     fanMode = "Auto";
   }
-  else if (action == "mister_spray" || action == "spray")
+  else if (action == "light_on" || action == "grow_light_on")
   {
-    startMisterOneShot();
+    growLightSet(true, "light_on command");
   }
-  else if (action == "mister_off")
+  else if (action == "light_off" || action == "grow_light_off")
   {
-    misterMode = "ManualOff";
-    stopMisterNow("mister_off command");
-  }
-  else if (action == "mister_auto")
-  {
-    misterMode = "Auto";
+    growLightSet(false, "light_off command");
   }
   else
   {
@@ -1168,22 +1122,14 @@ void handleRoot()
       </div>
 
       <div class="card">
-        <div class="stat-label">Mister Control</div>
-        <div class="mode-toggle">
-          <button class="mode-btn active" onclick="setMisterMode('Auto')">Auto</button>
-          <button class="mode-btn" onclick="setMisterMode('ManualOn')">ON</button>
-          <button class="mode-btn" onclick="setMisterMode('ManualOff')">OFF</button>
+        <div class="stat-label">Grow Light</div>
+        <div class="controls">
+          <button class="btn-success" onclick="growLight('on')">Light ON</button>
+          <button class="btn-danger" onclick="growLight('off')">Light OFF</button>
         </div>
-        <div class="status-grid">
-          <div class="status-item"><label>Mode</label><span id="misterMode">Auto</span></div>
-          <div class="status-item"><label>Status</label><span id="misterStatus">OFF</span></div>
+        <div class="status-grid" style="margin-top: 15px;">
+          <div class="status-item"><label>Status</label><span id="growLightStatus">OFF</span></div>
           <div class="status-item"><label>Days</label><span id="daysSinceGermination">--</span></div>
-        </div>
-        <div class="controls" style="margin-top: 10px;">
-          <button class="btn-primary" onclick="misterSprayNow()">Spray Now (10s)</button>
-        </div>
-        <div style="margin-top: 15px; padding: 10px; background: #ffeaa7; border-radius: 8px; display: none;" id="misterCountdown">
-          <span style="font-weight: bold;">Misters active for <span id="misterDaysRemaining">0</span> more days</span>
         </div>
       </div>
     </div>
@@ -1256,9 +1202,10 @@ void handleRoot()
           document.getElementById('pumpState').textContent = data.pumpState || 'OFF';
           document.getElementById('motorStatus').textContent = data.motorStatus || 'OFF';
           
-          // Update fan mode and mister mode displays
+          // Update fan mode and grow light displays
           document.getElementById('fanMode').textContent = data.fanMode || 'Auto';
-          document.getElementById('misterMode').textContent = data.misterMode || 'Auto';
+          const lightOn = data.growLight === true || data.growLight === 'true';
+          document.getElementById('growLightStatus').textContent = lightOn ? 'ON' : 'OFF';
           document.getElementById('germinationStatus').textContent = data.daysSinceGermination > 0 ? 'Active (' + data.daysSinceGermination + ' days)' : 'Not Started';
 
           // Update temperature and humidity. A failed DHT read arrives as JSON
@@ -1298,34 +1245,8 @@ void handleRoot()
             fansStatusSpan.style.color = '#333';
           }
 
-          // Update mister status
-          const misterStatusSpan = document.getElementById('misterStatus');
           const daysSinceGerm = data.daysSinceGermination || 0;
-          const daysRemaining = Math.max(0, 3 - daysSinceGerm);
-          
           document.getElementById('daysSinceGermination').textContent = daysSinceGerm;
-          
-          if (daysSinceGerm < 3) {
-            const misterCountdown = document.getElementById('misterCountdown');
-            misterCountdown.style.display = 'block';
-            document.getElementById('misterDaysRemaining').textContent = daysRemaining;
-            
-            if (data.misterActive) {
-              misterStatusSpan.textContent = '💦 SPRAYING';
-              misterStatusSpan.style.color = '#0984e3';
-            } else {
-              misterStatusSpan.textContent = 'Ready (6am/6pm)';
-              misterStatusSpan.style.color = '#f39c12';
-            }
-          } else {
-            misterStatusSpan.textContent = 'OFF (germination done)';
-            misterStatusSpan.style.color = '#666';
-            document.getElementById('misterCountdown').style.display = 'none';
-          }
-          
-          if (lastDaysSinceGermination !== daysSinceGerm && daysSinceGerm >= 3 && lastDaysSinceGermination >= 0) {
-            showNotification('✓ Germination period ended. Misters have been turned off. Use main water pump for watering.');
-          }
           lastDaysSinceGermination = daysSinceGerm;
 
           const stageClasses = ['stage-germination', 'stage-growth', 'stage-harvest', 'stage-unknown'];
@@ -1362,12 +1283,8 @@ void handleRoot()
       fetch('/fan?mode=' + mode).then(updateStatus).catch(e => console.error(e));
     }
 
-    function setMisterMode(mode) {
-      fetch('/mister?mode=' + mode).then(updateStatus).catch(e => console.error(e));
-    }
-
-    function misterSprayNow() {
-      fetch('/mister?action=spray').then(updateStatus).catch(e => console.error(e));
+    function growLight(action) {
+      fetch('/light?action=' + action).then(updateStatus).catch(e => console.error(e));
     }
 
     function germinationAction(action) {
@@ -1471,14 +1388,13 @@ void handleStatus()
   unsigned long daysSinceGerm = getDaysSinceGermination();
 
   String fanModeLabel = getFanModeLabel();
-  String misterModeLabel = getMisterModeLabel();
   bool wifiConnected = WiFi.status() == WL_CONNECTED;
   String wifiMode = (WiFi.getMode() == WIFI_AP) ? "AP" : (WiFi.getMode() == WIFI_STA) ? "STA"
                                                                                       : "OFF";
 
   char buffer[1800];
   snprintf(buffer, sizeof(buffer),
-           "{\"distance\":%ld,\"growthStage\":\"%s\",\"soilValue\":%d,\"flowValue\":%s,\"flowPulses\":%lu,\"flowWindowMs\":%lu,\"flowTotalPulses\":%lu,\"flowTotalMl\":%s,\"flowFault\":%s,\"pumpMode\":\"%s\",\"pumpState\":\"%s\",\"motorStatus\":\"%s\",\"temperature\":%s,\"humidity\":%s,\"floatSwitch\":%s,\"fansActive\":%s,\"fanMode\":\"%s\",\"misterActive\":%s,\"misterMode\":\"%s\",\"daysSinceGermination\":%lu,\"wifiConnected\":%s,\"wifiMode\":\"%s\",\"deviceIp\":\"%s\",\"connectionStatus\":\"%s\"}",
+           "{\"distance\":%ld,\"growthStage\":\"%s\",\"soilValue\":%d,\"flowValue\":%s,\"flowPulses\":%lu,\"flowWindowMs\":%lu,\"flowTotalPulses\":%lu,\"flowTotalMl\":%s,\"flowFault\":%s,\"pumpMode\":\"%s\",\"pumpState\":\"%s\",\"motorStatus\":\"%s\",\"temperature\":%s,\"humidity\":%s,\"floatSwitch\":%s,\"fansActive\":%s,\"fanMode\":\"%s\",\"growLight\":%s,\"daysSinceGermination\":%lu,\"wifiConnected\":%s,\"wifiMode\":\"%s\",\"deviceIp\":\"%s\",\"connectionStatus\":\"%s\"}",
            currentHeight,
            growthStage.c_str(),
            analogRead(SOIL_PIN),
@@ -1496,8 +1412,7 @@ void handleStatus()
            floatSwitchState ? "true" : "false",
            fansActive ? "true" : "false",
            fanModeLabel.c_str(),
-           misterSprayInProgress ? "true" : "false",
-           misterModeLabel.c_str(),
+           growLightOn ? "true" : "false",
            daysSinceGerm,
            wifiConnected ? "true" : "false",
            wifiMode.c_str(),
@@ -1640,7 +1555,7 @@ void handleFanControl()
   }
 }
 
-void handleMisterControl()
+void handleGrowLightControl()
 {
   if (!server.hasArg("action"))
   {
@@ -1648,32 +1563,15 @@ void handleMisterControl()
     return;
   }
   String action = server.arg("action");
-  if (action == "mode")
+  if (action == "on")
   {
-    if (!server.hasArg("mode"))
-    {
-      server.send(400, "text/plain", "mode query missing");
-      return;
-    }
-    String mode = server.arg("mode");
-    if (mode == "Auto" || mode == "ManualOn" || mode == "ManualOff")
-    {
-      misterMode = mode;
-      if (mode == "ManualOff")
-      {
-        stopMisterNow("manual mode set to Off");
-      }
-      server.send(200, "text/plain", "OK");
-    }
-    else
-    {
-      server.send(400, "text/plain", "invalid mode");
-    }
+    growLightSet(true, "LAN on");
+    server.send(200, "text/plain", "Grow light ON");
   }
-  else if (action == "spray")
+  else if (action == "off")
   {
-    startMisterOneShot();
-    server.send(200, "text/plain", "OK");
+    growLightSet(false, "LAN off");
+    server.send(200, "text/plain", "Grow light OFF");
   }
   else
   {
@@ -1817,10 +1715,11 @@ void setup()
   digitalWrite(FAN3_RELAY, HIGH); // OFF
   Serial.println("Fan relays initialized (OFF)");
 
-  // Mister relay pin (HIGH = OFF)
-  pinMode(WATER_MISTER_RELAY, OUTPUT);
-  digitalWrite(WATER_MISTER_RELAY, HIGH); // OFF
-  Serial.println("Mister relay initialized (OFF)");
+  // Grow light relay pin (HIGH = OFF)
+  pinMode(GROW_LIGHT_RELAY, OUTPUT);
+  digitalWrite(GROW_LIGHT_RELAY, HIGH); // OFF
+  growLightOn = false;
+  Serial.println("Grow light relay initialized (OFF)");
 
   // Load germination time from SPIFFS
   germinationStartTime = loadGerminationTime();
@@ -1841,7 +1740,7 @@ void setup()
   server.on("/control", handleControl);
   server.on("/motor", handleMotorControl);
   server.on("/fan", handleFanControl);
-  server.on("/mister", handleMisterControl);
+  server.on("/light", handleGrowLightControl);
   server.on("/germination", handleGerminationControl);
   server.on("/heightHistory", handleHeightHistory);
   server.on("/waterEvents", handleWaterEvents);
@@ -1882,8 +1781,6 @@ void setup()
     // real wall clock. Without this the RTC starts at the Unix epoch on every
     // boot, so the dashboard's freshness check (Date.now() - ts) always sees a
     // ~56-year gap and reports the device offline even while it is publishing.
-    // It also drives the 6am/6pm mister schedule in loop(), which is otherwise
-    // referenced to power-on time rather than actual local time.
     // 19800 = UTC+5:30 (Asia/Colombo); no DST offset.
     Serial.print("Syncing time via NTP");
     configTime(19800, 0, "pool.ntp.org", "time.nist.gov");
@@ -1986,7 +1883,7 @@ void loop()
     {
       germinationStartTime = millis();
       saveGerminationTime(germinationStartTime);
-      Serial.println("Germination event detected - mister schedule starts");
+      Serial.println("Germination event detected");
     }
   }
 
@@ -2054,99 +1951,12 @@ void loop()
   }
   // ManualOn and ManualOff are handled directly in handleFanControl()
 
-  // ----- 6. Mister Control Logic -----
-  unsigned long daysSinceGermination = getDaysSinceGermination();
-  bool curtainOpen = motorTriggered; // Curtain opens after first motor trigger
-  bool shouldMisterWork = (daysSinceGermination < GERMINATION_PERIOD_DAYS) && !curtainOpen;
+  // ----- 6. Grow Light -----
+  // Nothing to do here. The light is manual on/off only, so it holds the state
+  // set by growLightSet() until the next command. The mister that used to own
+  // this relay needed a state machine here for its 6am/6pm schedule, one-shot
+  // spray timeout and max-continuous ceiling; none of that applies to a light.
 
-  // SAFETY: a spray must always have an end. Both checks sit outside the mode
-  // branches on purpose. The timed one used to live inside the "Auto" branch,
-  // which meant a cloud-triggered spray (that also set the mode to ManualOn)
-  // matched no branch at all and latched the relay on indefinitely.
-  if (misterSprayInProgress && misterSprayTimed &&
-      (millis() - misterSprayStartTime >= MISTER_SPRAY_DURATION))
-  {
-    stopMisterNow("timed spray complete");
-  }
-  else if (misterSprayInProgress && !misterSprayTimed &&
-           (millis() - misterSprayStartTime >= MISTER_MAX_CONTINUOUS_MS))
-  {
-    // A continuous spray hit its ceiling. The mode has to be forced off too:
-    // leaving it at "ManualOn" would let the branch below switch the relay
-    // straight back on the next time through loop().
-    misterMode = "ManualOff";
-    stopMisterNow("continuous spray hit max runtime");
-  }
-
-  if (misterMode == "ManualOn" && !misterSprayInProgress)
-  {
-    // Manual ON: continuous spray, bounded only by MISTER_MAX_CONTINUOUS_MS
-    digitalWrite(WATER_MISTER_RELAY, LOW); // ON
-    misterSprayInProgress = true;
-    misterSprayTimed = false;
-    misterSprayStartTime = millis(); // stamped so the ceiling check above can fire
-    Serial.println("Mister ON (manual continuous)");
-  }
-  else if (misterMode == "ManualOff" && misterSprayInProgress && !misterSprayTimed)
-  {
-    // Manual OFF stops a continuous spray. A one-shot is left to expire above so
-    // that "Spray Now" still works while the mode happens to be Off; an explicit
-    // mister_off command stops it immediately via stopMisterNow().
-    stopMisterNow("manual off");
-  }
-  else if (misterMode == "Auto" && shouldMisterWork)
-  {
-    // Get current hour (simplified - assumes device time is set correctly)
-    // For now, using a simple check based on elapsed time since start
-    // TODO: In production, use proper RTC or NTP time
-    time_t now = time(nullptr);
-    struct tm *timeinfo = localtime(&now);
-    int currentHour = timeinfo->tm_hour;
-
-    // Check for 6am and 6pm spray times
-    static bool spray6amDone = false;
-    static bool spray6pmDone = false;
-
-    if (currentHour == 6 && !spray6amDone)
-    {
-      // Time for 6am spray
-      if (!misterSprayInProgress)
-      {
-        Serial.println("Mister schedule: 6am");
-        startMisterOneShot();
-      }
-      spray6amDone = true;
-      spray6pmDone = false; // reset PM flag
-    }
-    else if (currentHour == 18 && !spray6pmDone)
-    {
-      // Time for 6pm spray
-      if (!misterSprayInProgress)
-      {
-        Serial.println("Mister schedule: 6pm");
-        startMisterOneShot();
-      }
-      spray6pmDone = true;
-      spray6amDone = false; // reset AM flag
-    }
-    else if (currentHour != 6 && currentHour != 18)
-    {
-      spray6amDone = false;
-      spray6pmDone = false;
-    }
-
-    // Timed sprays are stopped by the unconditional safety check at the top of
-    // this section, so there is no per-branch stop here any more.
-  }
-  else if (misterMode == "Auto")
-  {
-    // After germination period or when curtain is open. A one-shot spray is
-    // allowed to finish; only a continuous spray is cut short here.
-    if (misterSprayInProgress && !misterSprayTimed)
-    {
-      stopMisterNow("germination period ended or curtain open");
-    }
-  }
   // ----- Flow rate -----
   // The window length is MEASURED, never assumed. loop() does not run at a fixed
   // rate: readDistanceCM() blocks for up to 50 ms, and each Firebase HTTPS call has

@@ -872,7 +872,7 @@
                 </div>
             </div>
 
-            <!-- Fans & Mister Control Card -->
+            <!-- Fans & Grow Light Control Card -->
             <div class="card">
                 <div class="card-header">
                     <span class="card-title"><span class="card-icon">🌀</span> Climate Auxiliaries</span>
@@ -890,12 +890,12 @@
                 <div>
                     <div
                         style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin-bottom: 6px;">
-                        Water Mister Spray</div>
+                        Grow Light <span id="growLightBadge"
+                            style="text-transform: none; color: var(--text-muted); font-weight: 600;">&mdash; OFF</span>
+                    </div>
                     <div class="control-btns">
-                        <button class="btn btn-success" onclick="controlAux('mister', 'spray', 'spray')">Spray
-                            10s</button>
-                        <button class="btn btn-danger" onclick="controlAux('mister', 'ManualOff')">Stop</button>
-                        <button class="btn btn-neutral" onclick="controlAux('mister', 'Auto')">Auto Mode</button>
+                        <button class="btn btn-success" onclick="controlAux('light', 'ManualOn')">Light ON</button>
+                        <button class="btn btn-danger" onclick="controlAux('light', 'ManualOff')">Light OFF</button>
                     </div>
                 </div>
             </div>
@@ -1315,6 +1315,13 @@
             motorBadge.className = 'stage-badge ' + (motorMoving ? 'stage-germination' : 'stage-unknown');
             motorBadge.textContent = motorSt;
 
+            // Grow light: a plain boolean from the device, so treat anything
+            // non-true (including a missing field on older firmware) as OFF.
+            const lightOn = data.growLight === true || data.growLight === 'true';
+            const lightBadge = document.getElementById('growLightBadge');
+            lightBadge.textContent = lightOn ? '— ON' : '— OFF';
+            lightBadge.style.color = lightOn ? 'var(--accent-green, #00b894)' : 'var(--text-muted)';
+
             // Diagnostics
             document.getElementById('diagIp').textContent = data.deviceIp || '192.168.1.xxx';
         }
@@ -1327,9 +1334,8 @@
             if (target === 'fan') {
                 return mode === 'ManualOn' ? 'fan_on' : mode === 'ManualOff' ? 'fan_off' : 'fan_auto';
             }
-            if (target === 'mister') {
-                return (action === 'spray' || mode === 'ManualOn') ? 'mister_spray'
-                    : mode === 'ManualOff' ? 'mister_off' : 'mister_auto';
+            if (target === 'light') {
+                return mode === 'ManualOn' ? 'light_on' : 'light_off';
             }
             if (mode && !action) {
                 if (mode === 'ClearFault') return 'pump_fault_clear';
@@ -1349,10 +1355,8 @@
         function lanEndpoint(base, { target, mode, action } = {}) {
             base = base.replace(/\/$/, '');
             if (target === 'fan') return `${base}/fan?mode=${encodeURIComponent(mode || 'Auto')}`;
-            if (target === 'mister') {
-                return action === 'spray'
-                    ? `${base}/mister?action=spray`
-                    : `${base}/mister?action=mode&mode=${encodeURIComponent(mode || 'Auto')}`;
+            if (target === 'light') {
+                return `${base}/light?action=${mode === 'ManualOn' ? 'on' : 'off'}`;
             }
             if (mode && !action) return `${base}/control?mode=${encodeURIComponent(mode)}`;
             if (action) return `${base}/motor?action=${encodeURIComponent(action)}`;
