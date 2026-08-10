@@ -36,7 +36,7 @@
 
 // ==================== Constants ====================
 // Motor run time (ms)
-#define MOTOR_RUN_TIME 5000 // 5 seconds
+#define MOTOR_RUN_TIME 8000 // 8 seconds
 // Soil threshold (wet when > value)
 #define SOIL_THRESHOLD 2000
 // Flow threshold (ml/min) – legacy "high flow" warning level shown on the dashboard.
@@ -82,7 +82,7 @@ const char *AP_PASSWORD = "microgreen123";
 // Published in /live so the dashboard can tell a stale flash from a wiring fault:
 // if the board is publishing but this is behind, the fix is `pio run -t upload`,
 // not more debugging of the browser.
-#define FIRMWARE_VERSION "2026.08.10-growlight"
+#define FIRMWARE_VERSION "2026.08.10-motor8s"
 
 // ==================== Firebase Realtime Database Configuration ====================
 // ESP32 pushes telemetry to Firebase and polls for pending commands.
