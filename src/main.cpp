@@ -65,9 +65,17 @@
 #define PULSES_PER_LITER 450.0 // YF-S201 ~ 450 pulses per liter
 // DHT sensor type (AM2301 is DHT21 equivalent)
 #define DHT_TYPE DHT21
-// Temperature and humidity thresholds
+// Temperature and humidity thresholds. The fans run when EITHER limit is exceeded
+// (see the fan section of loop()) — humid air alone is enough to warrant circulation,
+// and so is hot air that happens to be dry.
 #define TEMP_THRESHOLD 28.0   // °C - turn fans on if temp > this
 #define HUMIDITY_THRESHOLD 60 // % - turn fans on if humidity > this
+// Hysteresis (deadband). Once the fans are on they stay on until the reading falls
+// this far BELOW the trigger. The AM2301 jitters by a percent or two, so without a
+// deadband a humidity hovering at 60 % would switch the relay every DHT read (2 s)
+// and wear out the contacts.
+#define TEMP_HYSTERESIS 1.0     // °C
+#define HUMIDITY_HYSTERESIS 3.0 // %
 // Mister spray duration
 #define MISTER_SPRAY_DURATION 10000 // milliseconds (10 seconds)
 // Hard ceiling on a continuous "Manual On" spray. A mister left on from a phone
@@ -1116,7 +1124,7 @@ void handleRoot()
         <div class="status-grid">
           <div class="status-item"><label>Mode</label><span id="fanMode">Auto</span></div>
           <div class="status-item"><label>Status</label><span id="fansStatus">OFF</span></div>
-          <div class="status-item"><label>Trigger</label><span style="font-size: 0.8em;">Temp >28°C<br/>Humidity >60%</span></div>
+          <div class="status-item"><label>Trigger</label><span style="font-size: 0.8em;">Temp >28°C<br/><em>or</em> Humidity >60%</span></div>
         </div>
       </div>
 
@@ -1981,7 +1989,23 @@ void loop()
   }
 
   // ----- 5. Fan Control Logic -----
-  bool shouldFansBeOn = (temperature > TEMP_THRESHOLD) && (humidity > HUMIDITY_THRESHOLD);
+  // EITHER limit triggers the fans; this used to require both at once, which meant a
+  // humid tray at 24 °C got no circulation at all — exactly the condition that
+  // encourages mould on microgreens.
+  //
+  // The trigger point moves depending on which way we are switching (hysteresis), so
+  // a reading parked on the threshold cannot oscillate the relay.
+  bool shouldFansBeOn;
+  if (fansActive)
+  {
+    shouldFansBeOn = (temperature > TEMP_THRESHOLD - TEMP_HYSTERESIS) ||
+                     (humidity > HUMIDITY_THRESHOLD - HUMIDITY_HYSTERESIS);
+  }
+  else
+  {
+    shouldFansBeOn = (temperature > TEMP_THRESHOLD) ||
+                     (humidity > HUMIDITY_THRESHOLD);
+  }
   if (fanMode == "Auto")
   {
     // Auto mode: turn on if conditions met, off if not
@@ -2003,7 +2027,7 @@ void loop()
       digitalWrite(FAN2_RELAY, HIGH); // OFF
       digitalWrite(FAN3_RELAY, HIGH); // OFF
       fansActive = false;
-      Serial.println("Fans turned OFF (auto) - Temperature or humidity below threshold");
+      Serial.println("Fans turned OFF (auto) - both temperature and humidity back below threshold");
     }
   }
   // ManualOn and ManualOff are handled directly in handleFanControl()

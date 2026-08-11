@@ -8,6 +8,9 @@ Host-side test for the two pieces of logic changed in `src/main.cpp`:
    flow by exactly the overrun factor.
 2. **Pump decision table** — the drain-line flow interlock must stop the pump in Auto
    mode, while Manual On is still able to override it.
+3. **Fan trigger** — the fans run when *either* temperature > 28 °C or humidity > 60 %
+   (previously both were required simultaneously), with a hysteresis deadband so a
+   reading sitting on the threshold cannot chatter the relay.
 
 ## Run
 
@@ -29,7 +32,8 @@ Exit code 0 means every check passed.
 ## Keeping it in sync
 
 The constants at the top of `flow_pump_test.cpp` mirror `src/main.cpp`. If you change
-`PULSES_PER_LITER`, `FLOW_DETECT_ML_MIN`, `FLOW_FAULT_CLEAR_MS` or `SOIL_THRESHOLD`
+`PULSES_PER_LITER`, `FLOW_DETECT_ML_MIN`, `FLOW_FAULT_CLEAR_MS`, `SOIL_THRESHOLD`,
+`TEMP_THRESHOLD`, `HUMIDITY_THRESHOLD`, `TEMP_HYSTERESIS` or `HUMIDITY_HYSTERESIS`
 in the firmware, update them here too.
 
 ## On-hardware checks

@@ -15,6 +15,10 @@ static const double PULSES_PER_LITER = 450.0;
 static const double FLOW_DETECT_ML_MIN = 60.0;
 static const unsigned long FLOW_FAULT_CLEAR_MS = 8000;
 static const int SOIL_THRESHOLD = 2000;
+static const double TEMP_THRESHOLD = 28.0;
+static const double HUMIDITY_THRESHOLD = 60.0;
+static const double TEMP_HYSTERESIS = 1.0;
+static const double HUMIDITY_HYSTERESIS = 3.0;
 
 static int failures = 0;
 
@@ -85,6 +89,18 @@ static bool pumpShouldRun(const std::string &pumpMode, bool flowFault, int soilV
     return soilValue > SOIL_THRESHOLD;
 }
 
+// ---- Logic under test: fan trigger with hysteresis ----
+// fansOn is the CURRENT relay state; the return value is the desired next state.
+static bool fansShouldRun(double temperature, double humidity, bool fansOn)
+{
+    if (fansOn)
+    {
+        return (temperature > TEMP_THRESHOLD - TEMP_HYSTERESIS) ||
+               (humidity > HUMIDITY_THRESHOLD - HUMIDITY_HYSTERESIS);
+    }
+    return (temperature > TEMP_THRESHOLD) || (humidity > HUMIDITY_THRESHOLD);
+}
+
 int main()
 {
     printf("== Flow rate uses the measured window, not an assumed 1000 ms ==\n");
@@ -129,6 +145,34 @@ int main()
     check(pumpShouldRun("ManualOn", true, 0), "Manual On + OVERFLOW -> ON (manual override)");
     check(!pumpShouldRun("ManualOff", false, 5000), "Manual Off + wet soil -> OFF");
     check(!pumpShouldRun("ManualOff", true, 5000), "Manual Off + OVERFLOW -> OFF");
+
+    printf("\n== Fan trigger: EITHER temperature or humidity ==\n");
+    check(fansShouldRun(24.0, 65.0, false), "humid but cool (24 C, 65 %) -> ON");
+    check(fansShouldRun(30.0, 40.0, false), "hot but dry (30 C, 40 %) -> ON");
+    check(fansShouldRun(30.0, 65.0, false), "hot AND humid -> ON");
+    check(!fansShouldRun(24.0, 50.0, false), "cool and dry -> OFF");
+    check(!fansShouldRun(28.0, 60.0, false), "exactly at both thresholds -> OFF (strict >)");
+    check(fansShouldRun(28.0, 60.1, false), "a hair over humidity -> ON");
+
+    printf("\n== Fan hysteresis stops relay chatter at the threshold ==\n");
+    // Humidity drifting down through the trigger point must not switch the relay
+    // until it is clear of the deadband.
+    check(fansShouldRun(24.0, 59.5, true), "on at 59.5 % stays ON (inside deadband)");
+    check(fansShouldRun(24.0, 57.5, true), "on at 57.5 % stays ON (inside deadband)");
+    check(!fansShouldRun(24.0, 56.9, true), "on at 56.9 % turns OFF (clear of deadband)");
+    check(!fansShouldRun(24.0, 59.5, false), "off at 59.5 % stays OFF (below trigger)");
+    // The same for temperature.
+    check(fansShouldRun(27.5, 40.0, true), "on at 27.5 C stays ON (inside deadband)");
+    check(!fansShouldRun(26.9, 40.0, true), "on at 26.9 C turns OFF (clear of deadband)");
+
+    printf("\n== Regression: fans used to need BOTH conditions ==\n");
+    auto oldFansShouldRun = [](double t, double h) {
+        return (t > TEMP_THRESHOLD) && (h > HUMIDITY_THRESHOLD);
+    };
+    check(!oldFansShouldRun(24.0, 75.0),
+          "old logic left a humid 24 C tray with no circulation");
+    check(fansShouldRun(24.0, 75.0, false),
+          "new logic runs the fans on humidity alone");
 
     printf("\n== Regression: the old ordering made the pump uncontrollable ==\n");
     // Old behaviour: flow interlock was evaluated FIRST and returned unconditionally.
